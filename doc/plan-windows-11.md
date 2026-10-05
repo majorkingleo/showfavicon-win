@@ -5,6 +5,29 @@
 A tray (notification area) application: one icon per site, click → open browser,
 hourly refresh, grayed icon when offline, configurable via a settings window.
 
+## Toolchain (decided: C++ / MinGW-w64)
+
+> 2026-10-06 — supersedes the `.NET` architecture below. Requirement: **minimal
+> RAM**, so the app is a pure C++ Win32 program. The sections below keep their
+> reasoning (icon discovery, cache, retry, milestones) but are implemented in C++.
+
+- **Compiler/Build:** MinGW-w64 `g++` (C++20) from MSYS2, CMake + Ninja,
+  `windres` for resources/manifest. Setup: `scripts/install-msys2.ps1`
+  (VS Code task `MSYS2 + MinGW-w64 installieren`).
+- **No GUI toolkit.** Settings window via Win32 `DialogBoxParam` + `.rc`.
+- **Tray icon:** `Shell_NotifyIcon`.
+- **HTTP:** WinHTTP (built into Windows, no extra DLL); redirects followed
+  manually, final URL kept.
+- **Image decode (ICO/PNG/JPEG/BMP):** WIC (built in).
+- **SVG:** nanosvg + nanosvgrast (vendored headers, no runtime cost).
+- **PNG write (cache):** WIC encoder (no libpng).
+- **Grayscale:** GDI+ `ColorMatrix` (built in) or software conversion.
+- **Timer:** `SetTimer` / `CreateTimerQueueTimer`.
+- **Network change:** `NotifyAddrChange`.
+- **Config:** one URL per line in `%LOCALAPPDATA%\ShowFavicon\sites.txt`.
+
+Expected footprint: ~0.5–2 MB binary (`-Os -s -flto`), ~5–15 MB idle RAM.
+
 ## Architecture
 
 - **C# / .NET 8 (WinForms)** — simplest reliable `NotifyIcon`. One `NotifyIcon`
@@ -135,5 +158,45 @@ The Android version of this idea is implemented and measured; the findings are i
 5. Refresh on network change, and retry with backoff while a site is failing.
 6. Editing an existing URL in the settings window.
 7. Decide the surface: tray icons only, or an always-on-top palette window.
-8. Self-contained publish (`dotnet publish -r win-x64 --self-contained`),
-   optional MSIX.
+8. Static release build (`cmake --build build --config Release` with `-Os -s
+   -flto`, ~0.5–2 MB), optional MSIX.
+
+## Step-by-step (C++)
+
+### Schritt 1 — Environment
+Run the VS Code task `MSYS2 + MinGW-w64 installieren` (or
+`powershell -ExecutionPolicy Bypass -File .\scripts\install-msys2.ps1`),
+restart the terminal, verify `g++ --version` and `cmake --version`.
+
+### Schritt 2 — Project skeleton
+`src/`, `src/resources/`, `CMakeLists.txt` (C++20, `-Os -s -flto`, `UNICODE`;
+link `gdiplus winhttp shell32 user32 gdi32 ole32 shlwapi`); `main.cpp` with
+`WinMain` + hidden message window.
+
+### Schritt 3 — Milestone 1: single site
+Read `sites.txt`, fetch with WinHTTP (follow redirects, remember the final
+URL), resolve icon candidates (`<link rel="icon">` first, `/favicon.ico` at
+the origin last, relative against the final URL, browser User-Agent), decode
+ICO/PNG via WIC and SVG via nanosvg, write PNG to the cache (temp + rename),
+create `HICON`, `Shell_NotifyIcon`, click → `ShellExecute(url)`.
+
+### Schritt 4 — Milestone 2: offline gray
+Failure flag next to the cache file, grayscale via GDI+ `ColorMatrix` (or
+software) + reduced alpha, show the last known icon grayed.
+
+### Schritt 5 — Milestone 3: settings
+`DialogBoxParam` + `.rc`; two URL fields, add/remove, close button;
+`WM_DROPFILES` for drag-and-drop.
+
+### Schritt 6 — Milestones 4–5: multi-site + refresh
+One `NotifyIcon` per site, hourly timer + fetch on startup, `NotifyAddrChange`
+in a background thread, retry with backoff (from 30 s, 6 attempts), skip fetch
+when there is no network.
+
+### Schritt 7 — Polish
+Edit an existing URL (field doubles as editor), fetch log + `--fetch-now`,
+manifest (DPI-aware, single instance), prune stale cache files.
+
+### Schritt 8 — Release
+`cmake --build build --config Release` with `-Os -s -flto` (~0.5–2 MB);
+optionally embed an icon/version resource.
