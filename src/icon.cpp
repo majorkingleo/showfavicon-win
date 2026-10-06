@@ -201,6 +201,10 @@ bool writePngFile(const RgbaImage& img, const std::wstring& path) {
     IWICImagingFactory* factory = wicFactory();
     if (!factory || img.width <= 0 || img.height <= 0) return false;
 
+    size_t slash = path.find_last_of(L'\\');
+    if (slash != std::wstring::npos)
+        ensureDir(path.substr(0, slash));
+
     std::wstring tmp = path + L".tmp";
     IStream* stream = nullptr;
     if (FAILED(SHCreateStreamOnFileW(tmp.c_str(), STGM_CREATE | STGM_WRITE, &stream)))
@@ -259,15 +263,56 @@ bool writePngFile(const RgbaImage& img, const std::wstring& path) {
     return true;
 }
 
-bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out,
-                      std::wstring& cacheFile) {
+bool loadPngFile(const std::wstring& path, RgbaImage& out) {
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+
+    DWORD sizeHigh = 0;
+    DWORD size = GetFileSize(h, &sizeHigh);
+    if (size == INVALID_FILE_SIZE && GetLastError() != NO_ERROR) {
+        CloseHandle(h);
+        return false;
+    }
+
+    std::vector<std::uint8_t> bytes(size);
+    DWORD read = 0;
+    bool ok = ReadFile(h, bytes.data(), size, &read, nullptr) && read == size;
+    CloseHandle(h);
+    if (!ok) return false;
+    return wicDecode(bytes, out);
+}
+
+void grayscale(RgbaImage& img, float alphaScale) {
+    for (auto& p : img.pixels) {
+        std::uint32_t b = p & 0xFFu;
+        std::uint32_t g = (p >> 8) & 0xFFu;
+        std::uint32_t r = (p >> 16) & 0xFFu;
+        std::uint32_t a = (p >> 24) & 0xFFu;
+        std::uint32_t l =
+            static_cast<std::uint32_t>(0.299f * r + 0.587f * g + 0.114f * b);
+        a = static_cast<std::uint32_t>(a * alphaScale);
+        p = (a << 24) | (l << 16) | (l << 8) | l;
+    }
+}
+
+void setFailureFlag(const std::wstring& cacheFile, bool failed) {
+    std::wstring flag = cacheFile + L".failed";
+    if (failed) {
+        HANDLE h = CreateFileW(flag.c_str(), GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    } else {
+        DeleteFileW(flag.c_str());
+    }
+}
+
+bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out) {
     std::vector<std::uint8_t> page;
     std::wstring pageUrl;
     if (!fetch(siteUrl, page, pageUrl)) return false;
 
     std::string html(page.begin(), page.end());
-    std::wstring host = hostFromUrl(pageUrl);
-    if (host.empty()) host = L"site";
 
     std::vector<std::wstring> candidates;
     for (const auto& href : findIconLinkHrefs(html))
@@ -282,12 +327,7 @@ bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out,
         std::vector<std::uint8_t> bytes;
         std::wstring finalCandidate;
         if (!fetch(candidate, bytes, finalCandidate)) continue;
-        if (decodeImage(bytes, out)) {
-            std::wstring dir = iconCacheDir();
-            ensureDir(dir);
-            cacheFile = dir + L"\\" + host + L".png";
-            return true;
-        }
+        if (decodeImage(bytes, out)) return true;
     }
     return false;
 }

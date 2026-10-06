@@ -17,7 +17,7 @@ const wchar_t kUserAgent[] =
 bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
            std::wstring& finalUrl) {
     HINTERNET hSession =
-        WinHttpOpen(L"ShowFavicon/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WinHttpOpen(L"ShowFavicon/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return false;
 
@@ -66,10 +66,11 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
             break;
         }
 
-        WinHttpSetTimeouts(hRequest, 10000, 10000, 10000, 15000);
+        WinHttpSetTimeouts(hRequest, 5000, 5000, 5000, 15000);
         WinHttpAddRequestHeaders(hRequest, kUserAgent, static_cast<DWORD>(-1),
                                  WINHTTP_ADDREQ_FLAG_ADD);
 
+        bool redirected = false;
         if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
             WinHttpReceiveResponse(hRequest, nullptr)) {
@@ -89,8 +90,7 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
                     locSize >= sizeof(wchar_t)) {
                     std::wstring location(loc, locSize / sizeof(wchar_t));
                     url = resolveUrl(url, location);
-                } else {
-                    break;  // redirect without a Location header
+                    redirected = true;
                 }
             } else if (status >= 200 && status < 300) {
                 body.clear();
@@ -113,6 +113,9 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
 
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
+
+        if (!redirected && !ok)
+            break;  // only redirects keep the loop going
     }
 
     WinHttpCloseHandle(hSession);

@@ -97,13 +97,26 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
         return 1;
     }
 
-    // Milestone 1: fetch + decode the icon synchronously at startup.
+    // Milestones 1+2: fetch + decode synchronously at startup. On failure,
+    // show the last known icon grayed (if cached) and set the failure flag.
+    std::wstring host = sf::hostFromUrl(g_siteUrl);
+    if (host.empty()) host = L"site";
+    std::wstring cacheFile = sf::iconCacheDir() + L"\\" + host + L".png";
+
     sf::RgbaImage img;
-    std::wstring cacheFile;
-    if (sf::fetchIconForSite(g_siteUrl, img, cacheFile)) {
+    if (sf::fetchIconForSite(g_siteUrl, img)) {
+        sf::writePngFile(img, cacheFile);
+        sf::setFailureFlag(cacheFile, false);
         g_nid.hIcon = sf::imageToHicon(img);
         g_ownsIcon = (g_nid.hIcon != nullptr);
-        sf::writePngFile(img, cacheFile);
+    } else {
+        sf::RgbaImage cached;
+        if (sf::loadPngFile(cacheFile, cached)) {
+            sf::grayscale(cached, 0.55f);
+            g_nid.hIcon = sf::imageToHicon(cached);
+            g_ownsIcon = (g_nid.hIcon != nullptr);
+        }
+        sf::setFailureFlag(cacheFile, true);
     }
     if (!g_nid.hIcon)
         g_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
