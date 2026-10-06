@@ -276,4 +276,37 @@ std::vector<std::wstring> loadSites() {
     return sites;
 }
 
+void saveSites(const std::vector<std::wstring>& sites) {
+    std::wstring dir = appDataDir();
+    for (size_t i = 1; i <= dir.size(); ++i) {
+        if (i == dir.size() || dir[i] == L'\\')
+            CreateDirectoryW(dir.substr(0, i).c_str(), nullptr);
+    }
+
+    std::string bytes;
+    for (const auto& s : sites) {
+        std::wstring line = trim(s);
+        if (line.empty()) continue;
+        int n = WideCharToMultiByte(CP_UTF8, 0, line.data(),
+                                    static_cast<int>(line.size()), nullptr, 0,
+                                    nullptr, nullptr);
+        if (n <= 0) continue;
+        std::string utf8(n, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, line.data(), static_cast<int>(line.size()),
+                            utf8.data(), n, nullptr, nullptr);
+        bytes += utf8;
+        bytes += "\r\n";
+    }
+
+    std::wstring file = dir + L"\\sites.txt";
+    HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(h, bytes.data(), static_cast<DWORD>(bytes.size()), &written,
+                  nullptr);
+        CloseHandle(h);
+    }
+}
+
 }  // namespace sf

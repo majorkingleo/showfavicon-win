@@ -27,5 +27,6 @@ std::vector<std::string> findIconLinkHrefs(const std::string& html);
 
 std::wstring appDataDir();              // %LOCALAPPDATA%\ShowFavicon
 std::vector<std::wstring> loadSites();  // one URL per line from sites.txt
+void saveSites(const std::vector<std::wstring>& sites);  // writes sites.txt
 
 }  // namespace sf

@@ -5,13 +5,18 @@
 
 #include "http.h"
 #include "icon.h"
+#include "settings.h"
 #include "util.h"
+
+#include <string>
+#include <vector>
 
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"ShowFaviconMainWindow";
 constexpr UINT kTrayCallbackMsg = WM_APP + 1;
 
+HINSTANCE g_hInstance = nullptr;
 std::wstring g_siteUrl;
 NOTIFYICONDATAW g_nid = {};
 bool g_ownsIcon = false;
@@ -21,9 +26,46 @@ void openSite() {
                   SW_SHOWNORMAL);
 }
 
+void refreshTrayIcon() {
+    std::wstring host = sf::hostFromUrl(g_siteUrl);
+    if (host.empty()) host = L"site";
+    std::wstring cacheFile = sf::iconCacheDir() + L"\\" + host + L".png";
+
+    sf::RgbaImage img;
+    bool ok = sf::fetchOrCachedIcon(g_siteUrl, cacheFile, img);
+    HICON icon = ok ? sf::imageToHicon(img) : nullptr;
+    bool owns = (icon != nullptr);
+    if (!icon) icon = LoadIcon(nullptr, IDI_APPLICATION);
+
+    if (g_ownsIcon && g_nid.hIcon)
+        DestroyIcon(g_nid.hIcon);
+    g_nid.hIcon = icon;
+    g_ownsIcon = owns;
+
+    lstrcpynW(g_nid.szTip, host.c_str(), sizeof(g_nid.szTip) / sizeof(g_nid.szTip[0]));
+    g_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+void openSettings(HWND hwnd) {
+    std::vector<std::wstring> sites = sf::loadSites();
+    if (sites.empty() && !g_siteUrl.empty())
+        sites.push_back(g_siteUrl);
+
+    int res = sf::showSettingsDialog(g_hInstance, hwnd, sites);
+    if (res == IDOK) {
+        sf::saveSites(sites);
+        if (!sites.empty()) {
+            g_siteUrl = sites[0];
+            refreshTrayIcon();
+        }
+    }
+}
+
 void showTrayMenu(HWND hwnd) {
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, 1, L"Open");
+    AppendMenuW(menu, MF_STRING, 3, L"Configure...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 2, L"Exit");
 
@@ -36,6 +78,8 @@ void showTrayMenu(HWND hwnd) {
 
     if (cmd == 1)
         openSite();
+    else if (cmd == 3)
+        openSettings(hwnd);
     else if (cmd == 2)
         DestroyWindow(hwnd);
 }
@@ -66,6 +110,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
                     PWSTR /*pCmdLine*/, int /*nCmdShow*/) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    g_hInstance = hInstance;
 
     auto sites = sf::loadSites();
     if (sites.empty())
@@ -104,22 +149,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     std::wstring cacheFile = sf::iconCacheDir() + L"\\" + host + L".png";
 
     sf::RgbaImage img;
-    if (sf::fetchIconForSite(g_siteUrl, img)) {
-        sf::writePngFile(img, cacheFile);
-        sf::setFailureFlag(cacheFile, false);
-        g_nid.hIcon = sf::imageToHicon(img);
-        g_ownsIcon = (g_nid.hIcon != nullptr);
-    } else {
-        sf::RgbaImage cached;
-        if (sf::loadPngFile(cacheFile, cached)) {
-            sf::grayscale(cached, 0.55f);
-            g_nid.hIcon = sf::imageToHicon(cached);
-            g_ownsIcon = (g_nid.hIcon != nullptr);
-        }
-        sf::setFailureFlag(cacheFile, true);
-    }
-    if (!g_nid.hIcon)
-        g_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+    bool ok = sf::fetchOrCachedIcon(g_siteUrl, cacheFile, img);
+    HICON icon = ok ? sf::imageToHicon(img) : nullptr;
+    g_ownsIcon = (icon != nullptr);
+    if (!icon) icon = LoadIcon(nullptr, IDI_APPLICATION);
+    g_nid.hIcon = icon;
 
     g_nid.cbSize = sizeof(g_nid);
     g_nid.hWnd = hwnd;

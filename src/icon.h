@@ -20,6 +20,11 @@ struct RgbaImage {
 // `out`.
 bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out);
 
+// Fetch and cache the icon; on failure fall back to the cached image, grayed.
+// Handles the failure flag and PNG write. Returns false when no icon exists.
+bool fetchOrCachedIcon(const std::wstring& siteUrl, const std::wstring& cacheFile,
+                       RgbaImage& out);
+
 // Decode a cached PNG file into `out`.
 bool loadPngFile(const std::wstring& path, RgbaImage& out);
 

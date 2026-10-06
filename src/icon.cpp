@@ -332,4 +332,20 @@ bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out) {
     return false;
 }
 
+bool fetchOrCachedIcon(const std::wstring& siteUrl, const std::wstring& cacheFile,
+                       RgbaImage& out) {
+    if (fetchIconForSite(siteUrl, out)) {
+        writePngFile(out, cacheFile);
+        setFailureFlag(cacheFile, false);
+        return true;
+    }
+    if (loadPngFile(cacheFile, out)) {
+        grayscale(out, 0.55f);
+        setFailureFlag(cacheFile, true);
+        return true;
+    }
+    setFailureFlag(cacheFile, true);
+    return false;
+}
+
 }  // namespace sf
