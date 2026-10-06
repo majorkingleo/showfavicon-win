@@ -184,7 +184,7 @@ create `HICON`, `Shell_NotifyIcon`, click → `ShellExecute(url)`.
 Failure flag next to the cache file, grayscale via GDI+ `ColorMatrix` (or
 software) + reduced alpha, show the last known icon grayed.
 
-### Schritt 5 — Milestone 3: settings
+### Schritt 5 — Milestone 3: settPings
 `DialogBoxParam` + `.rc`; two URL fields, add/remove, close button;
 `WM_DROPFILES` for drag-and-drop.
 
