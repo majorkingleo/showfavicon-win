@@ -6,6 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(showfavicon WIN32
     src/main.cpp
+    src/util.cpp
+    src/http.cpp
+    src/icon.cpp
+)
+
+target_include_directories(showfavicon PRIVATE
+    third_party/nanosvg
 )
 
 target_compile_definitions(showfavicon PRIVATE
@@ -17,7 +24,7 @@ target_compile_definitions(showfavicon PRIVATE
 
 target_compile_options(showfavicon PRIVATE
     -Os
-    -flto
+    -fno-declone-ctor-dtor
     -ffunction-sections
     -fdata-sections
     -Wall
@@ -28,13 +35,13 @@ target_link_options(showfavicon PRIVATE
     -municode
     -static
     -s
-    -flto
     -Wl,--gc-sections
 )
 
 target_link_libraries(showfavicon PRIVATE
     gdiplus
     winhttp
+    windowscodecs
     shell32
     user32
     gdi32
