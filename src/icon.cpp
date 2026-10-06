@@ -20,7 +20,9 @@ namespace sf {
 namespace {
 
 IWICImagingFactory* wicFactory() {
-    static IWICImagingFactory* factory = nullptr;
+    // Per-thread factory: the worker thread also calls WIC, and COM interface
+    // pointers must not cross apartment boundaries without marshaling.
+    static thread_local IWICImagingFactory* factory = nullptr;
     if (!factory) {
         CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                          IID_IWICImagingFactory,

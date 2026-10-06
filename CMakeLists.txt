@@ -59,6 +59,8 @@ target_link_libraries(showfavicon PRIVATE
     gdiplus
     winhttp
     windowscodecs
+    wininet
+    iphlpapi
     shell32
     user32
     gdi32
