@@ -31,7 +31,9 @@ public:
     explicit TextDropTarget(HWND hwnd) : m_hwnd(hwnd), m_ref(1) {}
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
-        if (!ppv) return E_POINTER;
+        if (!ppv) {
+            return E_POINTER;
+        }
         if (riid == IID_IUnknown || riid == IID_IDropTarget) {
             *ppv = static_cast<IDropTarget*>(this);
             AddRef();
@@ -43,7 +45,9 @@ public:
     STDMETHODIMP_(ULONG) AddRef() override { return ++m_ref; }
     STDMETHODIMP_(ULONG) Release() override {
         ULONG r = --m_ref;
-        if (r == 0) delete this;
+        if (r == 0) {
+            delete this;
+        }
         return r;
     }
 
@@ -89,9 +93,14 @@ TextDropTarget* g_dropTarget = nullptr;
 
 void addUrl(HWND dlg, const std::wstring& url) {
     std::wstring u = trim(url);
-    if (u.empty()) return;
-    for (const auto& s : *g_sites)
-        if (s == u) return;
+    if (u.empty()) {
+        return;
+    }
+    for (const auto& s : *g_sites) {
+        if (s == u) {
+            return;
+        }
+    }
     g_sites->push_back(u);
     SendDlgItemMessageW(dlg, IDC_SITE_LIST, LB_ADDSTRING, 0,
                         reinterpret_cast<LPARAM>(u.c_str()));
@@ -103,23 +112,33 @@ void addDroppedText(HWND dlg, const wchar_t* text) {
     std::wstring s(text);
     size_t i = 0;
     while (i < s.size()) {
-        while (i < s.size() && iswspace(s[i])) ++i;
+        while (i < s.size() && iswspace(s[i])) {
+            ++i;
+        }
         size_t start = i;
-        while (i < s.size() && !iswspace(s[i])) ++i;
+        while (i < s.size() && !iswspace(s[i])) {
+            ++i;
+        }
         if (i > start) {
             std::wstring tok = s.substr(start, i - start);
-            if (tok.find(L"://") != std::wstring::npos)
+            if (tok.find(L"://") != std::wstring::npos) {
                 addUrl(dlg, tok);
+            }
         }
     }
 }
 
 bool endsWithIgnoreCase(const std::wstring& s, const wchar_t* suffix) {
     size_t n = std::wcslen(suffix);
-    if (s.size() < n) return false;
+    if (s.size() < n) {
+        return false;
+    }
     std::wstring tail = s.substr(s.size() - n);
-    for (auto& c : tail)
-        if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+    for (auto& c : tail) {
+        if (c >= L'A' && c <= L'Z') {
+            c += L'a' - L'A';
+        }
+    }
     return tail == suffix;
 }
 
@@ -127,9 +146,10 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
     switch (msg) {
         case WM_INITDIALOG: {
             g_dlg = hwnd;
-            for (const auto& s : *g_sites)
+            for (const auto& s : *g_sites) {
                 SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_ADDSTRING, 0,
                                     reinterpret_cast<LPARAM>(s.c_str()));
+            }
             DragAcceptFiles(hwnd, TRUE);
             g_dropTarget = new TextDropTarget(hwnd);
             RegisterDragDrop(hwnd, g_dropTarget);
@@ -177,7 +197,9 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
                         wchar_t url[2048] = {};
                         GetPrivateProfileStringW(L"InternetShortcut", L"URL", L"",
                                                  url, 2048, p.c_str());
-                        if (url[0]) addUrl(hwnd, url);
+                        if (url[0]) {
+                            addUrl(hwnd, url);
+                        }
                     } else {
                         addUrl(hwnd, p);
                     }

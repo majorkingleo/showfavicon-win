@@ -35,7 +35,9 @@ IWICImagingFactory* wicFactory() {
 }
 
 bool looksLikeSvg(const std::vector<std::uint8_t>& bytes) {
-    if (bytes.empty()) return false;
+    if (bytes.empty()) {
+        return false;
+    }
     size_t n = std::min<size_t>(bytes.size(), 1024);
     std::string lower;
     lower.reserve(n);
@@ -50,11 +52,15 @@ bool looksLikeSvg(const std::vector<std::uint8_t>& bytes) {
 
 bool wicDecode(const std::vector<std::uint8_t>& bytes, RgbaImage& out) {
     IWICImagingFactory* factory = wicFactory();
-    if (!factory) return false;
+    if (!factory) {
+        return false;
+    }
 
     IStream* stream =
         SHCreateMemStream(bytes.data(), static_cast<UINT>(bytes.size()));
-    if (!stream) return false;
+    if (!stream) {
+        return false;
+    }
 
     IWICBitmapDecoder* decoder = nullptr;
     HRESULT hr = factory->CreateDecoderFromStream(stream, nullptr,
@@ -105,11 +111,15 @@ bool wicDecode(const std::vector<std::uint8_t>& bytes, RgbaImage& out) {
 }
 
 bool svgDecode(const std::vector<std::uint8_t>& bytes, RgbaImage& out) {
-    if (bytes.empty()) return false;
+    if (bytes.empty()) {
+        return false;
+    }
     std::string data(bytes.begin(), bytes.end());
 
     NSVGimage* image = nsvgParse(const_cast<char*>(data.c_str()), "px", 96.0f);
-    if (!image) return false;
+    if (!image) {
+        return false;
+    }
 
     const int size = 32;
     NSVGrasterizer* rast = nsvgCreateRasterizer();
@@ -145,17 +155,23 @@ bool decodeImage(const std::vector<std::uint8_t>& bytes, RgbaImage& out) {
         CPPDEBUG( "icon: decoding as SVG" );
         return svgDecode(bytes, out);
     }
-    if (wicDecode(bytes, out)) return true;
+    if (wicDecode(bytes, out)) {
+        return true;
+    }
     CPPDEBUG( "icon: WIC found no image, retrying as SVG" );
     return svgDecode(bytes, out);  // in case WIC missed an SVG it cannot handle
 }
 
 bool ensureDir(const std::wstring& path) {
-    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return true;
+    }
     size_t pos = path.find(L'\\');
     while (pos != std::wstring::npos) {
         std::wstring cur = path.substr(0, pos);
-        if (!cur.empty()) CreateDirectoryW(cur.c_str(), nullptr);
+        if (!cur.empty()) {
+            CreateDirectoryW(cur.c_str(), nullptr);
+        }
         pos = path.find(L'\\', pos + 1);
     }
     CreateDirectoryW(path.c_str(), nullptr);
@@ -169,7 +185,9 @@ std::wstring iconCacheDir() {
 }
 
 HICON imageToHicon(const RgbaImage& img) {
-    if (img.width <= 0 || img.height <= 0 || img.pixels.empty()) return nullptr;
+    if (img.width <= 0 || img.height <= 0 || img.pixels.empty()) {
+        return nullptr;
+    }
 
     HDC hdc = GetDC(nullptr);
 
@@ -188,9 +206,10 @@ HICON imageToHicon(const RgbaImage& img) {
     void* bits = nullptr;
     HBITMAP hbmColor = CreateDIBSection(hdc, reinterpret_cast<BITMAPINFO*>(&bi),
                                         DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (hbmColor && bits)
+    if (hbmColor && bits) {
         std::memcpy(bits, img.pixels.data(),
                     img.pixels.size() * sizeof(std::uint32_t));
+    }
 
     HBITMAP hbmMask = CreateBitmap(img.width, img.height, 1, 1, nullptr);
 
@@ -200,24 +219,32 @@ HICON imageToHicon(const RgbaImage& img) {
     ii.hbmColor = hbmColor;
     HICON hIcon = CreateIconIndirect(&ii);
 
-    if (hbmColor) DeleteObject(hbmColor);
-    if (hbmMask) DeleteObject(hbmMask);
+    if (hbmColor) {
+        DeleteObject(hbmColor);
+    }
+    if (hbmMask) {
+        DeleteObject(hbmMask);
+    }
     ReleaseDC(nullptr, hdc);
     return hIcon;
 }
 
 bool writePngFile(const RgbaImage& img, const std::wstring& path) {
     IWICImagingFactory* factory = wicFactory();
-    if (!factory || img.width <= 0 || img.height <= 0) return false;
+    if (!factory || img.width <= 0 || img.height <= 0) {
+        return false;
+    }
 
     size_t slash = path.find_last_of(L'\\');
-    if (slash != std::wstring::npos)
+    if (slash != std::wstring::npos) {
         ensureDir(path.substr(0, slash));
+    }
 
     std::wstring tmp = path + L".tmp";
     IStream* stream = nullptr;
-    if (FAILED(SHCreateStreamOnFileW(tmp.c_str(), STGM_CREATE | STGM_WRITE, &stream)))
+    if (FAILED(SHCreateStreamOnFileW(tmp.c_str(), STGM_CREATE | STGM_WRITE, &stream))) {
         return false;
+    }
 
     IWICBitmapEncoder* encoder = nullptr;
     if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder))) {
@@ -239,7 +266,9 @@ bool writePngFile(const RgbaImage& img, const std::wstring& path) {
     }
     if (FAILED(frame->Initialize(props))) {
         frame->Release();
-        if (props) props->Release();
+        if (props) {
+            props->Release();
+        }
         encoder->Release();
         stream->Release();
         return false;
@@ -263,7 +292,9 @@ bool writePngFile(const RgbaImage& img, const std::wstring& path) {
 
     frame->Commit();
     frame->Release();
-    if (props) props->Release();
+    if (props) {
+        props->Release();
+    }
     encoder->Commit();
     encoder->Release();
     stream->Release();
@@ -275,7 +306,9 @@ bool writePngFile(const RgbaImage& img, const std::wstring& path) {
 bool loadPngFile(const std::wstring& path, RgbaImage& out) {
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                            OPEN_EXISTING, 0, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
 
     DWORD sizeHigh = 0;
     DWORD size = GetFileSize(h, &sizeHigh);
@@ -288,7 +321,9 @@ bool loadPngFile(const std::wstring& path, RgbaImage& out) {
     DWORD read = 0;
     bool ok = ReadFile(h, bytes.data(), size, &read, nullptr) && read == size;
     CloseHandle(h);
-    if (!ok) return false;
+    if (!ok) {
+        return false;
+    }
     return wicDecode(bytes, out);
 }
 
@@ -310,7 +345,9 @@ void setFailureFlag(const std::wstring& cacheFile, bool failed) {
     if (failed) {
         HANDLE h = CreateFileW(flag.c_str(), GENERIC_WRITE, 0, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        if (h != INVALID_HANDLE_VALUE) {
+            CloseHandle(h);
+        }
     } else {
         DeleteFileW(flag.c_str());
     }
@@ -328,19 +365,23 @@ bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out) {
     std::string html(page.begin(), page.end());
 
     std::vector<std::wstring> candidates;
-    for (const auto& href : findIconLinkHrefs(html))
+    for (const auto& href : findIconLinkHrefs(html)) {
         candidates.push_back(resolveUrl(pageUrl, utf8ToWide(href)));
+    }
 
     Url u;
-    if (parseUrl(pageUrl, u))
+    if (parseUrl(pageUrl, u)) {
         candidates.push_back(originRoot(u) + L"/favicon.ico");
+    }
 
     CPPDEBUG( Tools::format( "icon: %d candidate(s) for %s",
                              static_cast<int>(candidates.size()),
                              wideToUtf8(pageUrl) ) );
 
     for (const auto& candidate : candidates) {
-        if (candidate.empty()) continue;
+        if (candidate.empty()) {
+            continue;
+        }
         std::vector<std::uint8_t> bytes;
         std::wstring finalCandidate;
         if (!fetch(candidate, bytes, finalCandidate)) {

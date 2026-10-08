@@ -51,20 +51,28 @@ bool networkAvailable() {
 // ShowFavicon reacts to: it turns on the console side of the logging.
 bool hasFlag(int argc, wchar_t* const* argv, const wchar_t* name) {
     for (int i = 1; i < argc; ++i) {
-        if (argv[i] && lstrcmpiW(argv[i], name) == 0) return true;
+        if (argv[i] && lstrcmpiW(argv[i], name) == 0) {
+            return true;
+        }
     }
     return false;
 }
 
 ULONGLONG backoffMs(int failures) {
-    if (failures <= 0) return kHourMs;
-    if (failures > 6) return kHourMs;  // stop retrying until the next trigger
-    return 30000ull * failures;        // 30s, 60s, ..., 180s
+    if (failures <= 0) {
+        return kHourMs;
+    }
+    if (failures > 6) {
+        return kHourMs;  // stop retrying until the next trigger
+    }
+    return 30000ull * failures;  // 30s, 60s, ..., 180s
 }
 
 std::wstring cacheFileFor(const std::wstring& url) {
     std::wstring host = sf::hostFromUrl(url);
-    if (host.empty()) host = L"site";
+    if (host.empty()) {
+        host = L"site";
+    }
     return sf::iconCacheDir() + L"\\" + host + L".png";
 }
 
@@ -89,7 +97,9 @@ void addSiteIcon(Site& site, size_t index) {
     site.ownsIcon = false;
 
     std::wstring tip = sf::hostFromUrl(site.url);
-    if (tip.empty()) tip = L"ShowFavicon";
+    if (tip.empty()) {
+        tip = L"ShowFavicon";
+    }
     lstrcpynW(site.nid.szTip, tip.c_str(),
               sizeof(site.nid.szTip) / sizeof(site.nid.szTip[0]));
     Shell_NotifyIconW(NIM_ADD, &site.nid);
@@ -103,8 +113,9 @@ void removeAllIcons() {
     CPPDEBUG( Tools::format( "tray: removing %d icon(s)",
                              static_cast<int>(g_sites.size()) ) );
     for (auto& site : g_sites) {
-        if (site.nid.cbSize)
+        if (site.nid.cbSize) {
             Shell_NotifyIconW(NIM_DELETE, &site.nid);
+        }
         destroyOwnedIcon(site);
     }
     g_sites.clear();
@@ -136,7 +147,9 @@ void refreshSite(size_t idx) {
     UINT uID = 0;
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
-        if (idx >= g_sites.size()) return;
+        if (idx >= g_sites.size()) {
+            return;
+        }
         url = g_sites[idx].url;
         cacheFile = g_sites[idx].cacheFile;
         uID = g_sites[idx].nid.uID;
@@ -159,7 +172,9 @@ void refreshSite(size_t idx) {
     bool ok = sf::fetchOrCachedIcon(url, cacheFile, img);
     HICON icon = ok ? sf::imageToHicon(img) : nullptr;
     bool owns = (icon != nullptr);
-    if (!icon) icon = LoadIcon(nullptr, IDI_APPLICATION);
+    if (!icon) {
+        icon = LoadIcon(nullptr, IDI_APPLICATION);
+    }
 
     NOTIFYICONDATAW nid = {};
     {
@@ -184,8 +199,9 @@ void refreshSite(size_t idx) {
     CPPDEBUG( Tools::format( "refresh: site %u %s", uID,
                              ok ? "ok" : "failed" ) );
 
-    if (nid.cbSize)
+    if (nid.cbSize) {
         Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
 }
 
 DWORD WINAPI workerProc(LPVOID) {
@@ -193,7 +209,9 @@ DWORD WINAPI workerProc(LPVOID) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     for (;;) {
-        if (WaitForSingleObject(g_hStop, 0) == WAIT_OBJECT_0) break;
+        if (WaitForSingleObject(g_hStop, 0) == WAIT_OBJECT_0) {
+            break;
+        }
 
         ULONGLONG now = GetTickCount64();
         ULONGLONG earliest = ULLONG_MAX;
@@ -201,25 +219,33 @@ DWORD WINAPI workerProc(LPVOID) {
         {
             std::lock_guard<std::mutex> lk(g_sitesMutex);
             for (size_t i = 0; i < g_sites.size(); ++i) {
-                if (g_sites[i].nextRefreshAt <= now)
+                if (g_sites[i].nextRefreshAt <= now) {
                     due.push_back(i);
-                else if (g_sites[i].nextRefreshAt < earliest)
+                } else if (g_sites[i].nextRefreshAt < earliest) {
                     earliest = g_sites[i].nextRefreshAt;
+                }
             }
         }
 
-        for (size_t i : due) refreshSite(i);
+        for (size_t i : due) {
+            refreshSite(i);
+        }
 
         DWORD waitMs = 1000;
-        if (earliest != ULLONG_MAX && earliest > now)
+        if (earliest != ULLONG_MAX && earliest > now) {
             waitMs = static_cast<DWORD>(std::min<ULONGLONG>(earliest - now, 60000));
+        }
 
         HANDLE hs[2] = {g_hStop, g_hRefresh};
         DWORD w = WaitForMultipleObjects(2, hs, FALSE, waitMs);
-        if (w == WAIT_OBJECT_0) break;
+        if (w == WAIT_OBJECT_0) {
+            break;
+        }
         if (w == WAIT_OBJECT_0 + 1) {
             std::lock_guard<std::mutex> lk(g_sitesMutex);
-            for (auto& s : g_sites) s.nextRefreshAt = 0;  // force immediate refresh
+            for (auto& s : g_sites) {
+                s.nextRefreshAt = 0;  // force immediate refresh
+            }
         }
     }
 
@@ -230,14 +256,18 @@ DWORD WINAPI workerProc(LPVOID) {
 DWORD WINAPI networkProc(LPVOID) {
     sf::nameCurrentThread(L"network");
     for (;;) {
-        if (WaitForSingleObject(g_hStop, 0) == WAIT_OBJECT_0) break;
+        if (WaitForSingleObject(g_hStop, 0) == WAIT_OBJECT_0) {
+            break;
+        }
 
         HANDLE hNotify = nullptr;
         if (NotifyAddrChange(&hNotify, nullptr) == NO_ERROR && hNotify) {
             HANDLE hs[2] = {g_hStop, hNotify};
             DWORD w = WaitForMultipleObjects(2, hs, FALSE, INFINITE);
             CloseHandle(hNotify);
-            if (w == WAIT_OBJECT_0) break;
+            if (w == WAIT_OBJECT_0) {
+                break;
+            }
             if (w == WAIT_OBJECT_0 + 1) {
                 CPPDEBUG( "network: address change, refreshing all sites" );
                 SetEvent(g_hRefresh);  // network changed
@@ -253,7 +283,9 @@ void openSite(size_t idx) {
     std::wstring url;
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
-        if (idx < g_sites.size()) url = g_sites[idx].url;
+        if (idx < g_sites.size()) {
+            url = g_sites[idx].url;
+        }
     }
     if (!url.empty()) {
         CPPDEBUG( Tools::format( "site: opening %s", sf::wideToUtf8(url) ) );
@@ -265,9 +297,13 @@ void openSettings(HWND hwnd) {
     std::vector<std::wstring> urls;
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
-        for (const auto& s : g_sites) urls.push_back(s.url);
+        for (const auto& s : g_sites) {
+            urls.push_back(s.url);
+        }
     }
-    if (urls.empty()) urls.push_back(L"https://github.com/");
+    if (urls.empty()) {
+        urls.push_back(L"https://github.com/");
+    }
 
     int res = sf::showSettingsDialog(g_hInstance, hwnd, urls);
     CPPDEBUG( Tools::format( "settings: dialog closed with %d", res ) );
@@ -291,18 +327,21 @@ void showTrayMenu(HWND hwnd, size_t idx) {
                               pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(menu);
 
-    if (cmd == 1)
+    if (cmd == 1) {
         openSite(idx);
-    else if (cmd == 3)
+    } else if (cmd == 3) {
         openSettings(hwnd);
-    else if (cmd == 2)
+    } else if (cmd == 2) {
         DestroyWindow(hwnd);
+    }
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case kTrayCallbackMsg: {
-            if (wParam < 1) return 0;
+            if (wParam < 1) {
+                return 0;
+            }
             size_t idx = static_cast<size_t>(wParam) - 1;
             if (lParam == WM_LBUTTONUP) {
                 openSite(idx);
@@ -336,7 +375,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     const bool console = argv && hasFlag(argc, argv, L"-d");
-    if (argv) LocalFree(argv);
+    if (argv) {
+        LocalFree(argv);
+    }
 
     const std::wstring logFile = sf::appDataDir() + L"\\showfavicon.log";
     sf::logInit(logFile, console);
@@ -349,11 +390,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     g_hInstance = hInstance;
 
     std::vector<std::wstring> urls = sf::loadSites();
-    if (urls.empty()) urls.push_back(L"https://github.com/");
+    if (urls.empty()) {
+        urls.push_back(L"https://github.com/");
+    }
 
     CPPDEBUG( Tools::format( "config: %d site(s)", static_cast<int>(urls.size()) ) );
-    for (const auto& u : urls)
+    for (const auto& u : urls) {
         CPPDEBUG( Tools::format( "config: site %s", sf::wideToUtf8(u) ) );
+    }
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);

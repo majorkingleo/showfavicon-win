@@ -40,7 +40,9 @@ void attachConsole() {
         // ERROR_ACCESS_DENIED means the process already owns a console, which
         // is the normal case for a test host; only a console-less process has
         // to allocate one.
-        if (GetLastError() != ERROR_ACCESS_DENIED && !AllocConsole()) return;
+        if (GetLastError() != ERROR_ACCESS_DENIED && !AllocConsole()) {
+            return;
+        }
     }
 
     FILE* f = nullptr;
@@ -54,8 +56,9 @@ void attachConsole() {
     // completeness, so failing to enable them is not fatal.
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode = 0;
-    if (GetConsoleMode(out, &mode))
+    if (GetConsoleMode(out, &mode)) {
         SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
 }
 
 // The backend loop. Every backend's semaphore is released by every message, so
@@ -71,23 +74,34 @@ void run() {
     auto next_flush = std::chrono::steady_clock::now() + kFlushInterval;
 
     while (!g_quit) {
-        if (g_console) g_console->log();
-        if (g_file) g_file->log();
+        if (g_console) {
+            g_console->log();
+        }
+        if (g_file) {
+            g_file->log();
+        }
 
         if (std::chrono::steady_clock::now() > next_flush) {
-            if (g_file) g_file->flush();
+            if (g_file) {
+                g_file->flush();
+            }
             next_flush = std::chrono::steady_clock::now() + kFlushInterval;
         }
 
-        if (primary)
+        if (primary) {
             primary->wait_for(kIdleTimeout);
-        else
+        } else {
             std::this_thread::sleep_for(kIdleTimeout);
+        }
     }
 
     // Final drain, while the backends are still alive.
-    if (g_console) g_console->log();
-    if (g_file) g_file->log();
+    if (g_console) {
+        g_console->log();
+    }
+    if (g_file) {
+        g_file->log();
+    }
 }
 
 // std::ofstream::open takes a narrow path, which on Windows is interpreted in
@@ -96,7 +110,9 @@ void run() {
 std::string ansiPath(const std::wstring& wide) {
     int n = WideCharToMultiByte(CP_ACP, 0, wide.c_str(), static_cast<int>(wide.size()),
                                 nullptr, 0, nullptr, nullptr);
-    if (n <= 0) return {};
+    if (n <= 0) {
+        return {};
+    }
     std::string out(static_cast<size_t>(n), '\0');
     WideCharToMultiByte(CP_ACP, 0, wide.c_str(), static_cast<int>(wide.size()),
                         out.data(), n, nullptr, nullptr);
@@ -106,7 +122,9 @@ std::string ansiPath(const std::wstring& wide) {
 }  // namespace
 
 void logInit(const std::wstring& logFile, bool console) {
-    if (console) attachConsole();
+    if (console) {
+        attachConsole();
+    }
 
     if (!logFile.empty()) {
         // Backends before the frontend: a log file that cannot be opened (or a
@@ -129,8 +147,12 @@ void logInit(const std::wstring& logFile, bool console) {
 
     g_frontend = std::make_unique<AsyncOut::Debug>();
 
-    if (g_file) g_frontend->subscribe(g_file.get());
-    if (g_console) g_frontend->subscribe(g_console.get());
+    if (g_file) {
+        g_frontend->subscribe(g_file.get());
+    }
+    if (g_console) {
+        g_frontend->subscribe(g_console.get());
+    }
 
     // From here on CPPDEBUG has somewhere to go.
     Tools::x_debug = g_frontend.get();

@@ -52,8 +52,9 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
         uc.lpszExtraInfo = extra;
         uc.dwExtraInfoLength = 8192;
 
-        if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &uc))
+        if (!WinHttpCrackUrl(url.c_str(), static_cast<DWORD>(url.size()), 0, &uc)) {
             break;
+        }
 
         bool secure = (uc.nScheme == INTERNET_SCHEME_HTTPS);
         INTERNET_PORT port =
@@ -62,7 +63,9 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
                                : INTERNET_DEFAULT_HTTP_PORT);
 
         HINTERNET hConnect = WinHttpConnect(hSession, host, port, 0);
-        if (!hConnect) break;
+        if (!hConnect) {
+            break;
+        }
 
         std::wstring object = path;
         object += extra;
@@ -115,10 +118,13 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
                     body.resize(oldSize + available);
                     DWORD read = 0;
                     if (!WinHttpReadData(hRequest, body.data() + oldSize, available,
-                                         &read))
+                                         &read)) {
                         break;
+                    }
                     body.resize(oldSize + read);
-                    if (read == 0) break;
+                    if (read == 0) {
+                        break;
+                    }
                 }
                 finalUrl = url;
                 ok = true;
@@ -137,8 +143,9 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
 
-        if (!redirected && !ok)
+        if (!redirected && !ok) {
             break;  // only redirects keep the loop going
+        }
     }
 
     WinHttpCloseHandle(hSession);
