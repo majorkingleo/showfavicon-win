@@ -172,6 +172,22 @@ void endEdit(HWND dlg) {
     SetDlgItemTextW(dlg, IDC_ADD, L"&Add");
 }
 
+// The Run entry is only touched on OK, so Cancel leaves it as it was.
+void applyAutoStart(HWND dlg) {
+    const bool wanted = IsDlgButtonChecked(dlg, IDC_AUTOSTART) == BST_CHECKED;
+    if (wanted == autoStartEnabled()) {
+        return;
+    }
+    if (!setAutoStart(wanted)) {
+        CPPDEBUG( "settings: could not update the autostart entry" );
+        MessageBoxW(dlg, L"ShowFavicon could not update the Windows autostart entry.",
+                    L"ShowFavicon", MB_ICONWARNING);
+        return;
+    }
+    CPPDEBUG( Tools::wformat( L"settings: autostart %s",
+                              wanted ? L"enabled" : L"disabled" ) );
+}
+
 bool endsWithIgnoreCase(const std::wstring& s, const wchar_t* suffix) {
     size_t n = std::wcslen(suffix);
     if (s.size() < n) {
@@ -191,6 +207,8 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
         case WM_INITDIALOG: {
             g_dlg = hwnd;
             g_editIndex = -1;
+            CheckDlgButton(hwnd, IDC_AUTOSTART,
+                           autoStartEnabled() ? BST_CHECKED : BST_UNCHECKED);
             for (const auto& s : *g_sites) {
                 SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_ADDSTRING, 0,
                                     reinterpret_cast<LPARAM>(s.c_str()));
@@ -258,6 +276,7 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
                     return TRUE;
                 }
                 case IDOK:
+                    applyAutoStart(hwnd);
                     EndDialog(hwnd, IDOK);
                     return TRUE;
                 case IDCANCEL:

@@ -7,3 +7,4 @@
 #define IDC_ADD        103
 #define IDC_REMOVE     104
 #define IDC_EDIT_SITE  105
+#define IDC_AUTOSTART  106

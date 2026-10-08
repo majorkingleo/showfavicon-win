@@ -400,4 +400,67 @@ void saveSites(const std::vector<std::wstring>& sites) {
     }
 }
 
+namespace {
+
+constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunValue[] = L"ShowFavicon";
+
+std::wstring executablePath() {
+    wchar_t buf[MAX_PATH] = {};
+    const DWORD cap = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
+    const DWORD n = GetModuleFileNameW(nullptr, buf, cap);
+    if (n == 0 || n >= cap) {
+        return {};
+    }
+    return std::wstring(buf, n);
+}
+
+}  // namespace
+
+bool autoStartEnabled() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_QUERY_VALUE, &key) !=
+        ERROR_SUCCESS) {
+        return false;
+    }
+
+    DWORD type = 0;
+    DWORD size = 0;
+    const LONG res = RegQueryValueExW(key, kRunValue, nullptr, &type, nullptr, &size);
+    RegCloseKey(key);
+
+    return res == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ);
+}
+
+bool setAutoStart(bool enable) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0, KEY_SET_VALUE,
+                        nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    LONG res = ERROR_SUCCESS;
+
+    if (enable) {
+        const std::wstring exe = executablePath();
+        if (exe.empty()) {
+            RegCloseKey(key);
+            return false;
+        }
+        // Quoted, so a path with spaces survives.
+        const std::wstring quoted = L"\"" + exe + L"\"";
+        res = RegSetValueExW(key, kRunValue, 0, REG_SZ,
+                             reinterpret_cast<const BYTE*>(quoted.c_str()),
+                             static_cast<DWORD>((quoted.size() + 1) * sizeof(wchar_t)));
+    } else {
+        res = RegDeleteValueW(key, kRunValue);
+        if (res == ERROR_FILE_NOT_FOUND) {
+            res = ERROR_SUCCESS;  // already gone
+        }
+    }
+
+    RegCloseKey(key);
+    return res == ERROR_SUCCESS;
+}
+
 }  // namespace sf

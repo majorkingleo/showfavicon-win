@@ -44,4 +44,10 @@ std::wstring appDataDir();              // %LOCALAPPDATA%\ShowFavicon
 std::vector<std::wstring> loadSites();  // one URL per line from sites.txt
 void saveSites(const std::vector<std::wstring>& sites);  // writes sites.txt
 
+// The per-user Run entry that starts ShowFavicon at logon
+// (HKCU\Software\Microsoft\Windows\CurrentVersion\Run). setAutoStart returns
+// false when the registry could not be updated.
+bool autoStartEnabled();
+bool setAutoStart(bool enable);
+
 }  // namespace sf
