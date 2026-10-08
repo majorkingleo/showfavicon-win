@@ -404,9 +404,6 @@ namespace {
 
 constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValue[] = L"ShowFavicon";
-constexpr wchar_t kSettingsKey[] = L"Software\\ShowFavicon";
-constexpr wchar_t kPaletteXValue[] = L"PaletteX";
-constexpr wchar_t kPaletteYValue[] = L"PaletteY";
 
 // Where the shell remembers the notification-area choices, one subkey per icon.
 constexpr wchar_t kNotifyIconKey[] = L"Control Panel\\NotifyIconSettings";
@@ -469,57 +466,6 @@ bool setAutoStart(bool enable) {
 
     RegCloseKey(key);
     return res == ERROR_SUCCESS;
-}
-
-bool loadPalettePos(int& x, int& y) {
-    HKEY key = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kSettingsKey, 0, KEY_QUERY_VALUE, &key) !=
-        ERROR_SUCCESS) {
-        return false;
-    }
-
-    DWORD type = 0;
-    DWORD size = sizeof(DWORD);
-    DWORD value = 0;
-
-    const bool have_x =
-        RegQueryValueExW(key, kPaletteXValue, nullptr, &type,
-                         reinterpret_cast<BYTE*>(&value), &size) == ERROR_SUCCESS &&
-        type == REG_DWORD;
-
-    size = sizeof(DWORD);
-    DWORD value_y = 0;
-    const bool have_y = have_x &&
-        RegQueryValueExW(key, kPaletteYValue, nullptr, &type,
-                         reinterpret_cast<BYTE*>(&value_y), &size) == ERROR_SUCCESS &&
-        type == REG_DWORD;
-
-    RegCloseKey(key);
-
-    if (!have_y) {
-        return false;
-    }
-
-    x = static_cast<int>(value);
-    y = static_cast<int>(value_y);
-    return true;
-}
-
-void savePalettePos(int x, int y) {
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kSettingsKey, 0, nullptr, 0, KEY_SET_VALUE,
-                        nullptr, &key, nullptr) != ERROR_SUCCESS) {
-        return;
-    }
-
-    const DWORD value_x = static_cast<DWORD>(x);
-    const DWORD value_y = static_cast<DWORD>(y);
-    RegSetValueExW(key, kPaletteXValue, 0, REG_DWORD,
-                   reinterpret_cast<const BYTE*>(&value_x), sizeof(value_x));
-    RegSetValueExW(key, kPaletteYValue, 0, REG_DWORD,
-                   reinterpret_cast<const BYTE*>(&value_y), sizeof(value_y));
-
-    RegCloseKey(key);
 }
 
 int promoteNotificationIcons() {
