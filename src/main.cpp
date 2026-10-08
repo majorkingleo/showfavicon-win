@@ -23,6 +23,8 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"ShowFaviconMainWindow";
 constexpr UINT kTrayCallbackMsg = WM_APP + 1;
+constexpr UINT kShowSettingsMsg = WM_APP + 2;
+constexpr wchar_t kInstanceMutex[] = L"ShowFavicon.SingleInstance";
 constexpr ULONGLONG kHourMs = 3600000ull;
 constexpr wchar_t kDefaultSite[] = L"https://github.com/";
 
@@ -351,6 +353,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             return 0;
         }
+        case kShowSettingsMsg:
+            // A second start of the app asks this instance, which owns the tray
+            // icons, to show the dialog instead of growing its own.
+            CPPDEBUG( "instance: another start asked for the settings dialog" );
+            openSettings(hwnd);
+            return 0;
         case WM_DESTROY:
             CPPDEBUG( "shutdown: window destroyed" );
             SetEvent(g_hStop);
@@ -388,6 +396,24 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g_hInstance = hInstance;
+
+    // One tray app per session. A second start does not add its own icons: it
+    // asks the running instance to show the settings dialog, then exits. The
+    // mutex handle is deliberately never closed, so the object lives as long
+    // as the process and the name stays taken.
+    HANDLE hSingleInstance = CreateMutexW(nullptr, TRUE, kInstanceMutex);
+    if (hSingleInstance && GetLastError() == ERROR_ALREADY_EXISTS) {
+        CPPDEBUG( "instance: already running, asking it for the settings dialog" );
+        HWND running = FindWindowW(kWindowClassName, nullptr);
+        if (running) {
+            PostMessageW(running, kShowSettingsMsg, 0, 0);
+        } else {
+            CPPDEBUG( "instance: found no window to ask" );
+        }
+        sf::logShutdown();
+        CoUninitialize();
+        return 0;
+    }
 
     // Nothing configured means a first run: seed the default site, then open
     // the settings dialog (below) so it can be changed straight away.
