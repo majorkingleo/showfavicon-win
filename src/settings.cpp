@@ -1,5 +1,6 @@
 #include "settings.h"
 
+#include "http.h"
 #include "resource.h"
 #include "util.h"
 
@@ -172,6 +173,39 @@ void endEdit(HWND dlg) {
     SetDlgItemTextW(dlg, IDC_ADD, L"&Add");
 }
 
+// Add and Save test the URL before accepting it. Anything that is not an
+// http/https URL with a host is rejected outright. A URL that merely cannot be
+// reached is only warned about: a site that is down right now still has to stay
+// configurable. Returns false only for input that must not be added.
+bool testUrl(HWND dlg, const std::wstring& url) {
+    sf::Url parsed;
+    if (!sf::parseUrl(url, parsed) || parsed.host.empty()) {
+        MessageBoxW(dlg, L"That is not an http:// or https:// URL with a host name.",
+                    L"ShowFavicon", MB_ICONERROR);
+        return false;
+    }
+
+    // The fetch blocks this thread for up to the WinHTTP timeouts, so show that
+    // something is happening.
+    HCURSOR previous = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+
+    std::vector<std::uint8_t> body;
+    std::wstring finalUrl;
+    const bool reachable = sf::fetch(url, body, finalUrl);
+
+    SetCursor(previous);
+
+    if (!reachable) {
+        const std::wstring message =
+            L"Could not reach\n" + url +
+            L"\n\nThe entry is added anyway. It may work once the site is up "
+            L"again - the icon stays grayed until then.";
+        MessageBoxW(dlg, message.c_str(), L"ShowFavicon", MB_ICONWARNING);
+    }
+
+    return true;
+}
+
 // The Run entry is only touched on OK, so Cancel leaves it as it was.
 void applyAutoStart(HWND dlg) {
     const bool wanted = IsDlgButtonChecked(dlg, IDC_AUTOSTART) == BST_CHECKED;
@@ -256,6 +290,9 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
                     std::wstring u = trim(buf);
                     if (u.empty()) {
                         return TRUE;
+                    }
+                    if (!testUrl(hwnd, u)) {
+                        return TRUE;  // unusable URL: do not add it
                     }
                     if (g_editIndex >= 0 &&
                         static_cast<size_t>(g_editIndex) < g_sites->size()) {
