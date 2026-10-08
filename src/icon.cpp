@@ -7,6 +7,9 @@
 #include <shlwapi.h>
 #include <wincodec.h>
 
+#include <CpputilsDebug.h>
+#include <format.h>
+
 #include <algorithm>
 #include <cstring>
 
@@ -138,8 +141,12 @@ bool svgDecode(const std::vector<std::uint8_t>& bytes, RgbaImage& out) {
 }
 
 bool decodeImage(const std::vector<std::uint8_t>& bytes, RgbaImage& out) {
-    if (looksLikeSvg(bytes)) return svgDecode(bytes, out);
+    if (looksLikeSvg(bytes)) {
+        CPPDEBUG( "icon: decoding as SVG" );
+        return svgDecode(bytes, out);
+    }
     if (wicDecode(bytes, out)) return true;
+    CPPDEBUG( "icon: WIC found no image, retrying as SVG" );
     return svgDecode(bytes, out);  // in case WIC missed an SVG it cannot handle
 }
 
@@ -312,7 +319,11 @@ void setFailureFlag(const std::wstring& cacheFile, bool failed) {
 bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out) {
     std::vector<std::uint8_t> page;
     std::wstring pageUrl;
-    if (!fetch(siteUrl, page, pageUrl)) return false;
+    if (!fetch(siteUrl, page, pageUrl)) {
+        CPPDEBUG( Tools::format( "icon: page fetch failed for %s",
+                                 wideToUtf8(siteUrl) ) );
+        return false;
+    }
 
     std::string html(page.begin(), page.end());
 
@@ -324,12 +335,29 @@ bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out) {
     if (parseUrl(pageUrl, u))
         candidates.push_back(originRoot(u) + L"/favicon.ico");
 
+    CPPDEBUG( Tools::format( "icon: %d candidate(s) for %s",
+                             static_cast<int>(candidates.size()),
+                             wideToUtf8(pageUrl) ) );
+
     for (const auto& candidate : candidates) {
         if (candidate.empty()) continue;
         std::vector<std::uint8_t> bytes;
         std::wstring finalCandidate;
-        if (!fetch(candidate, bytes, finalCandidate)) continue;
-        if (decodeImage(bytes, out)) return true;
+        if (!fetch(candidate, bytes, finalCandidate)) {
+            CPPDEBUG( Tools::format( "icon: candidate unreachable %s",
+                                     wideToUtf8(candidate) ) );
+            continue;
+        }
+        CPPDEBUG( Tools::format( "icon: candidate %s, %d bytes",
+                                 wideToUtf8(finalCandidate),
+                                 static_cast<int>(bytes.size()) ) );
+        if (decodeImage(bytes, out)) {
+            CPPDEBUG( Tools::format( "icon: decoded %dx%d from %s",
+                                     out.width, out.height,
+                                     wideToUtf8(finalCandidate) ) );
+            return true;
+        }
+        CPPDEBUG( "icon: candidate did not decode" );
     }
     return false;
 }
@@ -339,14 +367,20 @@ bool fetchOrCachedIcon(const std::wstring& siteUrl, const std::wstring& cacheFil
     if (fetchIconForSite(siteUrl, out)) {
         writePngFile(out, cacheFile);
         setFailureFlag(cacheFile, false);
+        CPPDEBUG( Tools::format( "icon: cached %dx%d to %s", out.width, out.height,
+                                 wideToUtf8(cacheFile) ) );
         return true;
     }
     if (loadPngFile(cacheFile, out)) {
         grayscale(out, 0.55f);
         setFailureFlag(cacheFile, true);
+        CPPDEBUG( Tools::format( "icon: showing cached icon grayed (%s)",
+                                 wideToUtf8(cacheFile) ) );
         return true;
     }
     setFailureFlag(cacheFile, true);
+    CPPDEBUG( Tools::format( "icon: no icon and no cache for %s",
+                             wideToUtf8(siteUrl) ) );
     return false;
 }
 

@@ -6,8 +6,12 @@
 
 #include "http.h"
 #include "icon.h"
+#include "logging.h"
 #include "settings.h"
 #include "util.h"
+
+#include <CpputilsDebug.h>
+#include <format.h>
 
 #include <algorithm>
 #include <climits>
@@ -41,6 +45,15 @@ HANDLE g_hRefresh = nullptr;  // auto-reset; set on network/config change
 
 bool networkAvailable() {
     return InternetGetConnectedState(nullptr, 0) != FALSE;
+}
+
+// True when `name` appears among the command-line arguments. `-d` is the one
+// ShowFavicon reacts to: it turns on the console side of the logging.
+bool hasFlag(int argc, wchar_t* const* argv, const wchar_t* name) {
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] && lstrcmpiW(argv[i], name) == 0) return true;
+    }
+    return false;
 }
 
 ULONGLONG backoffMs(int failures) {
@@ -80,10 +93,15 @@ void addSiteIcon(Site& site, size_t index) {
     lstrcpynW(site.nid.szTip, tip.c_str(),
               sizeof(site.nid.szTip) / sizeof(site.nid.szTip[0]));
     Shell_NotifyIconW(NIM_ADD, &site.nid);
+
+    CPPDEBUG( Tools::format( "tray: added icon %u for %s",
+                             site.nid.uID, sf::wideToUtf8(tip) ) );
 }
 
 // Remove and destroy all tray icons. Caller holds the lock.
 void removeAllIcons() {
+    CPPDEBUG( Tools::format( "tray: removing %d icon(s)",
+                             static_cast<int>(g_sites.size()) ) );
     for (auto& site : g_sites) {
         if (site.nid.cbSize)
             Shell_NotifyIconW(NIM_DELETE, &site.nid);
@@ -94,6 +112,8 @@ void removeAllIcons() {
 
 // (Re)build the icon set from a list of URLs.
 void rebuildSites(const std::vector<std::wstring>& urls) {
+    CPPDEBUG( Tools::format( "config: rebuilding %d tray icon(s)",
+                             static_cast<int>(urls.size()) ) );
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
         removeAllIcons();
@@ -122,7 +142,10 @@ void refreshSite(size_t idx) {
         uID = g_sites[idx].nid.uID;
     }
 
+    CPPDEBUG( Tools::format( "refresh: site %u %s", uID, sf::wideToUtf8(url) ) );
+
     if (!networkAvailable()) {
+        CPPDEBUG( Tools::format( "refresh: no network, site %u deferred", uID ) );
         std::lock_guard<std::mutex> lk(g_sitesMutex);
         if (idx < g_sites.size() && g_sites[idx].nid.uID == uID) {
             g_sites[idx].failures++;
@@ -158,6 +181,9 @@ void refreshSite(size_t idx) {
             }
         }
     }
+    CPPDEBUG( Tools::format( "refresh: site %u %s", uID,
+                             ok ? "ok" : "failed" ) );
+
     if (nid.cbSize)
         Shell_NotifyIconW(NIM_MODIFY, &nid);
 }
@@ -210,8 +236,10 @@ DWORD WINAPI networkProc(LPVOID) {
             DWORD w = WaitForMultipleObjects(2, hs, FALSE, INFINITE);
             CloseHandle(hNotify);
             if (w == WAIT_OBJECT_0) break;
-            if (w == WAIT_OBJECT_0 + 1)
+            if (w == WAIT_OBJECT_0 + 1) {
+                CPPDEBUG( "network: address change, refreshing all sites" );
                 SetEvent(g_hRefresh);  // network changed
+            }
         } else {
             WaitForSingleObject(g_hStop, 5000);  // retry registration shortly
         }
@@ -225,8 +253,10 @@ void openSite(size_t idx) {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
         if (idx < g_sites.size()) url = g_sites[idx].url;
     }
-    if (!url.empty())
+    if (!url.empty()) {
+        CPPDEBUG( Tools::format( "site: opening %s", sf::wideToUtf8(url) ) );
         ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
 }
 
 void openSettings(HWND hwnd) {
@@ -238,6 +268,7 @@ void openSettings(HWND hwnd) {
     if (urls.empty()) urls.push_back(L"https://github.com/");
 
     int res = sf::showSettingsDialog(g_hInstance, hwnd, urls);
+    CPPDEBUG( Tools::format( "settings: dialog closed with %d", res ) );
     if (res == IDOK) {
         sf::saveSites(urls);
         rebuildSites(urls);
@@ -279,6 +310,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         case WM_DESTROY:
+            CPPDEBUG( "shutdown: window destroyed" );
             SetEvent(g_hStop);
             {
                 std::lock_guard<std::mutex> lk(g_sitesMutex);
@@ -295,11 +327,29 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
                     PWSTR /*pCmdLine*/, int /*nCmdShow*/) {
+    // A WIN32 GUI program has no console of its own, so `-d` is how the log
+    // becomes visible there. Every message also goes to the log file.
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    const bool console = argv && hasFlag(argc, argv, L"-d");
+    if (argv) LocalFree(argv);
+
+    const std::wstring logFile = sf::appDataDir() + L"\\showfavicon.log";
+    sf::logInit(logFile, console);
+
+    CPPDEBUG( Tools::format( "ShowFavicon starting (console=%s, log=%s)",
+                             console ? "yes" : "no",
+                             sf::wideToUtf8(logFile) ) );
+
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g_hInstance = hInstance;
 
     std::vector<std::wstring> urls = sf::loadSites();
     if (urls.empty()) urls.push_back(L"https://github.com/");
+
+    CPPDEBUG( Tools::format( "config: %d site(s)", static_cast<int>(urls.size()) ) );
+    for (const auto& u : urls)
+        CPPDEBUG( Tools::format( "config: site %s", sf::wideToUtf8(u) ) );
 
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
@@ -309,6 +359,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     wc.lpszClassName = kWindowClassName;
 
     if (!RegisterClassExW(&wc)) {
+        CPPDEBUG( "startup: RegisterClassExW failed" );
+        sf::logShutdown();
         CoUninitialize();
         return 1;
     }
@@ -322,6 +374,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
         nullptr, nullptr, hInstance, nullptr);
 
     if (!hwnd) {
+        CPPDEBUG( "startup: CreateWindowExW failed" );
+        sf::logShutdown();
         CoUninitialize();
         return 1;
     }
@@ -346,11 +400,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     HANDLE hWorker = CreateThread(nullptr, 0, workerProc, nullptr, 0, nullptr);
     HANDLE hNet = CreateThread(nullptr, 0, networkProc, nullptr, 0, nullptr);
 
+    CPPDEBUG( "startup: running" );
+
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+
+    CPPDEBUG( "shutdown: message loop ended" );
 
     SetEvent(g_hStop);
     WaitForSingleObject(hWorker, 30000);
@@ -361,5 +419,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     CloseHandle(g_hRefresh);
 
     CoUninitialize();
+
+    CPPDEBUG( "shutdown: done" );
+    sf::logShutdown();
+
     return static_cast<int>(msg.wParam);
 }

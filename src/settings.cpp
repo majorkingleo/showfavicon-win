@@ -3,6 +3,9 @@
 #include "resource.h"
 #include "util.h"
 
+#include <CpputilsDebug.h>
+#include <format.h>
+
 #include <windows.h>
 #include <shellapi.h>
 #include <ole2.h>
@@ -92,6 +95,8 @@ void addUrl(HWND dlg, const std::wstring& url) {
     g_sites->push_back(u);
     SendDlgItemMessageW(dlg, IDC_SITE_LIST, LB_ADDSTRING, 0,
                         reinterpret_cast<LPARAM>(u.c_str()));
+
+    CPPDEBUG( Tools::format( "settings: added %s", wideToUtf8(u) ) );
 }
 
 void addDroppedText(HWND dlg, const wchar_t* text) {
@@ -144,6 +149,8 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
                     LRESULT sel =
                         SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_GETCURSEL, 0, 0);
                     if (sel != LB_ERR) {
+                        CPPDEBUG( Tools::format( "settings: removed index %d",
+                                                 static_cast<int>(sel) ) );
                         SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_DELETESTRING,
                                             static_cast<WPARAM>(sel), 0);
                         g_sites->erase(g_sites->begin() + static_cast<size_t>(sel));

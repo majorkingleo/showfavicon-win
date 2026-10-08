@@ -5,6 +5,11 @@
 #include <windows.h>
 #include <winhttp.h>
 
+// The fetch log the plan asks for (doc/plan-windows-11.md, "Testing recipes"):
+// requested URL, redirects, status, byte count, final URL.
+#include <CpputilsDebug.h>
+#include <format.h>
+
 namespace sf {
 namespace {
 
@@ -19,7 +24,13 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
     HINTERNET hSession =
         WinHttpOpen(L"ShowFavicon/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return false;
+    if (!hSession) {
+        CPPDEBUG( Tools::format( "fetch: WinHttpOpen failed for %s",
+                                 wideToUtf8(initialUrl) ) );
+        return false;
+    }
+
+    CPPDEBUG( Tools::format( "fetch: GET %s", wideToUtf8(initialUrl) ) );
 
     std::wstring url = initialUrl;
     bool ok = false;
@@ -91,6 +102,9 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
                     std::wstring location(loc, locSize / sizeof(wchar_t));
                     url = resolveUrl(url, location);
                     redirected = true;
+                    CPPDEBUG( Tools::format( "fetch: HTTP %d -> %s",
+                                             static_cast<int>(status),
+                                             wideToUtf8(url) ) );
                 }
             } else if (status >= 200 && status < 300) {
                 body.clear();
@@ -108,6 +122,15 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
                 }
                 finalUrl = url;
                 ok = true;
+                CPPDEBUG( Tools::format( "fetch: HTTP %d, %d bytes, final %s",
+                                         static_cast<int>(status),
+                                         static_cast<int>(body.size()),
+                                         wideToUtf8(url) ) );
+            } else {
+                // A 404 on /favicon.ico is normal, so this stays informational.
+                CPPDEBUG( Tools::format( "fetch: HTTP %d for %s",
+                                         static_cast<int>(status),
+                                         wideToUtf8(url) ) );
             }
         }
 
@@ -119,6 +142,11 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
     }
 
     WinHttpCloseHandle(hSession);
+
+    if (!ok) {
+        CPPDEBUG( Tools::format( "fetch: gave up on %s", wideToUtf8(initialUrl) ) );
+    }
+
     return ok;
 }
 

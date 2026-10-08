@@ -21,6 +21,7 @@ std::wstring hostFromUrl(const std::wstring& url);
 
 std::wstring trim(const std::wstring& s);
 std::wstring utf8ToWide(const std::string& s);
+std::string wideToUtf8(const std::wstring& s);  // for log messages (always UTF-8)
 
 // Href attributes of <link rel="...icon..."> tags, in document order.
 std::vector<std::string> findIconLinkHrefs(const std::string& html);

@@ -222,6 +222,17 @@ std::wstring utf8ToWide(const std::string& s) {
     return out;
 }
 
+std::string wideToUtf8(const std::wstring& s) {
+    if (s.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
+                                nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
+                        out.data(), n, nullptr, nullptr);
+    return out;
+}
+
 std::vector<std::string> findIconLinkHrefs(const std::string& html) {
     std::vector<std::string> hrefs;
     size_t pos = 0;
