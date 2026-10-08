@@ -42,6 +42,25 @@
       "problemMatcher": []
     },
     {
+      "label": "Build ShowFavicon (Debug)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\build-debug.ps1"
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "MSYS2 reinstallieren",
       "type": "shell",
       "command": "powershell",

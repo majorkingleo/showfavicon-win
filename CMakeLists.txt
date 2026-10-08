@@ -40,18 +40,19 @@ target_compile_definitions(showfavicon PRIVATE
 )
 
 target_compile_options(showfavicon PRIVATE
-    -Os
     -fno-declone-ctor-dtor
     -ffunction-sections
     -fdata-sections
     -Wall
     -Wextra
+    $<$<CONFIG:Release>:-Os>
+    $<$<CONFIG:Debug>:-g -O0>
 )
 
 target_link_options(showfavicon PRIVATE
     -municode
     -static
-    -s
+    $<$<CONFIG:Release>:-s>
     -Wl,--gc-sections
 )
 
