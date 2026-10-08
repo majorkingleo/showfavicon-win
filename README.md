@@ -10,6 +10,22 @@ dependencies.
 
 This project is **vibe coded**
 
+## What it is for
+
+It watches a **server health check page**. Such a page keeps its favicon in sync
+with the state of the servers it checks: a green tick while everything is fine,
+a red or warning icon as soon as something is wrong. ShowFavicon pins that
+favicon to the notification area, so the state is visible at a glance — no
+browser tab kept open, no notifications to miss, and the icon is there even when
+the browser is closed.
+
+That is what the tool was written for, and it is why the icons are forced out of
+the Windows 11 overflow: an icon you have to open a flyout to look at is useless
+for this.
+
+A site that cannot be reached at all is the third state: the last cached icon is
+shown grayed rather than vanishing.
+
 ## Screenshots
 
 One icon per configured site, in the notification area next to the clock (marked
