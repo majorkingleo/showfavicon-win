@@ -50,4 +50,11 @@ void saveSites(const std::vector<std::wstring>& sites);  // writes sites.txt
 bool autoStartEnabled();
 bool setAutoStart(bool enable);
 
+// Palette window position, remembered between runs in
+// HKCU\Software\ShowFavicon. loadPalettePos returns false when nothing is
+// stored yet. Both tolerate negative values: a secondary monitor may sit left
+// of or above the primary one.
+bool loadPalettePos(int& x, int& y);
+void savePalettePos(int x, int y);
+
 }  // namespace sf

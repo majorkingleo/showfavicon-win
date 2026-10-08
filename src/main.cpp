@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <windowsx.h>
 #include <shellapi.h>
 #include <objbase.h>
 #include <wininet.h>
@@ -22,16 +23,22 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"ShowFaviconMainWindow";
-constexpr UINT kTrayCallbackMsg = WM_APP + 1;
+constexpr wchar_t kPaletteClassName[] = L"ShowFaviconPalette";
 constexpr UINT kShowSettingsMsg = WM_APP + 2;
+constexpr UINT kIconsChangedMsg = WM_APP + 3;
 constexpr wchar_t kInstanceMutex[] = L"ShowFavicon.SingleInstance";
 constexpr ULONGLONG kHourMs = 3600000ull;
 constexpr wchar_t kDefaultSite[] = L"https://github.com/";
 
+// Palette layout, in pixels.
+constexpr int kIconSize = 32;
+constexpr int kIconPad = 8;
+constexpr int kMaxColumns = 6;
+
 struct Site {
     std::wstring url;
     std::wstring cacheFile;
-    NOTIFYICONDATAW nid = {};
+    UINT id = 0;  // slot identity, so a refresh that raced a rebuild is ignored
     HICON icon = nullptr;
     bool ownsIcon = false;
     ULONGLONG nextRefreshAt = 0;
@@ -39,12 +46,22 @@ struct Site {
 };
 
 HINSTANCE g_hInstance = nullptr;
-HWND g_hwnd = nullptr;
+HWND g_hwnd = nullptr;     // hidden: second-start message and message loop only
+HWND g_hPalette = nullptr;
 std::vector<Site> g_sites;
 std::mutex g_sitesMutex;
 
+// Icons the worker replaced. Destroying them there would race the palette, which
+// paints them on the UI thread, so they are queued for it instead. Own mutex:
+// this must not wait behind g_sitesMutex.
+std::vector<HICON> g_retiredIcons;
+std::mutex g_retiredMutex;
+
 HANDLE g_hStop = nullptr;     // manual-reset; set on shutdown
 HANDLE g_hRefresh = nullptr;  // auto-reset; set on network/config change
+
+void resizePalette();
+void refreshPalette();
 
 bool networkAvailable() {
     return InternetGetConnectedState(nullptr, 0) != FALSE;
@@ -87,67 +104,65 @@ void destroyOwnedIcon(Site& site) {
     }
 }
 
-// Add a placeholder tray icon (uID = index + 1). Caller holds the lock.
-void addSiteIcon(Site& site, size_t index) {
-    site.nid = {};
-    site.nid.cbSize = sizeof(site.nid);
-    site.nid.hWnd = g_hwnd;
-    site.nid.uID = static_cast<UINT>(index + 1);
-    site.nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    site.nid.uCallbackMessage = kTrayCallbackMsg;
-    site.nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-    site.icon = site.nid.hIcon;
-    site.ownsIcon = false;
-
-    std::wstring tip = sf::hostFromUrl(site.url);
-    if (tip.empty()) {
-        tip = L"ShowFavicon";
+// Hand an icon over to the UI thread for destruction. Caller holds g_sitesMutex.
+void retireIcon(HICON icon) {
+    if (!icon) {
+        return;
     }
-    lstrcpynW(site.nid.szTip, tip.c_str(),
-              sizeof(site.nid.szTip) / sizeof(site.nid.szTip[0]));
-    Shell_NotifyIconW(NIM_ADD, &site.nid);
-
-    CPPDEBUG( Tools::wformat( L"tray: added icon %u for %s",
-                              site.nid.uID, tip ) );
+    std::lock_guard<std::mutex> lk(g_retiredMutex);
+    g_retiredIcons.push_back(icon);
 }
 
-// Remove and destroy all tray icons. Caller holds the lock.
-void removeAllIcons() {
-    CPPDEBUG( Tools::format( "tray: removing %d icon(s)",
+// Destroy the icons the worker retired. UI thread only.
+void freeRetiredIcons() {
+    std::vector<HICON> taken;
+    {
+        std::lock_guard<std::mutex> lk(g_retiredMutex);
+        taken.swap(g_retiredIcons);
+    }
+    for (HICON icon : taken) {
+        DestroyIcon(icon);
+    }
+}
+
+// Drop every site. Caller holds the lock.
+void destroyAllSites() {
+    CPPDEBUG( Tools::format( "palette: dropping %d site(s)",
                              static_cast<int>(g_sites.size()) ) );
     for (auto& site : g_sites) {
-        if (site.nid.cbSize) {
-            Shell_NotifyIconW(NIM_DELETE, &site.nid);
-        }
         destroyOwnedIcon(site);
     }
     g_sites.clear();
 }
 
-// (Re)build the icon set from a list of URLs.
+// (Re)build the site list from a list of URLs. UI thread only, so the icons it
+// frees cannot be the ones being painted.
 void rebuildSites(const std::vector<std::wstring>& urls) {
-    CPPDEBUG( Tools::format( "config: rebuilding %d tray icon(s)",
+    CPPDEBUG( Tools::format( "config: rebuilding the palette with %d site(s)",
                              static_cast<int>(urls.size()) ) );
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
-        removeAllIcons();
+        destroyAllSites();
         g_sites.reserve(urls.size());
         for (size_t i = 0; i < urls.size(); ++i) {
             Site site;
             site.url = urls[i];
             site.cacheFile = cacheFileFor(urls[i]);
-            addSiteIcon(site, i);
+            site.id = static_cast<UINT>(i + 1);
+            site.icon = LoadIcon(nullptr, IDI_APPLICATION);  // shared, not owned
             site.nextRefreshAt = 0;  // fetch immediately
             g_sites.push_back(std::move(site));
         }
     }
+    resizePalette();
+    refreshPalette();
     SetEvent(g_hRefresh);
 }
 
 void refreshSite(size_t idx) {
     std::wstring url;
     std::wstring cacheFile;
-    UINT uID = 0;
+    UINT id = 0;
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
         if (idx >= g_sites.size()) {
@@ -155,15 +170,15 @@ void refreshSite(size_t idx) {
         }
         url = g_sites[idx].url;
         cacheFile = g_sites[idx].cacheFile;
-        uID = g_sites[idx].nid.uID;
+        id = g_sites[idx].id;
     }
 
-    CPPDEBUG( Tools::wformat( L"refresh: site %u %s", uID, url ) );
+    CPPDEBUG( Tools::wformat( L"refresh: site %u %s", id, url ) );
 
     if (!networkAvailable()) {
-        CPPDEBUG( Tools::format( "refresh: no network, site %u deferred", uID ) );
+        CPPDEBUG( Tools::format( "refresh: no network, site %u deferred", id ) );
         std::lock_guard<std::mutex> lk(g_sitesMutex);
-        if (idx < g_sites.size() && g_sites[idx].nid.uID == uID) {
+        if (idx < g_sites.size() && g_sites[idx].id == id) {
             g_sites[idx].failures++;
             g_sites[idx].nextRefreshAt =
                 GetTickCount64() + backoffMs(g_sites[idx].failures);
@@ -179,16 +194,15 @@ void refreshSite(size_t idx) {
         icon = LoadIcon(nullptr, IDI_APPLICATION);
     }
 
-    NOTIFYICONDATAW nid = {};
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
-        if (idx < g_sites.size() && g_sites[idx].nid.uID == uID) {
+        if (idx < g_sites.size() && g_sites[idx].id == id) {
             Site& site = g_sites[idx];
-            destroyOwnedIcon(site);
+            if (site.ownsIcon && site.icon) {
+                retireIcon(site.icon);
+            }
             site.icon = icon;
             site.ownsIcon = owns;
-            site.nid.hIcon = icon;
-            nid = site.nid;
 
             if (ok) {
                 site.failures = 0;
@@ -197,14 +211,15 @@ void refreshSite(size_t idx) {
                 site.failures++;
                 site.nextRefreshAt = GetTickCount64() + backoffMs(site.failures);
             }
+        } else if (owns) {
+            // The list was rebuilt while fetching: nobody will paint this icon.
+            DestroyIcon(icon);
         }
     }
-    CPPDEBUG( Tools::format( "refresh: site %u %s", uID,
+    CPPDEBUG( Tools::format( "refresh: site %u %s", id,
                              ok ? "ok" : "failed" ) );
 
-    if (nid.cbSize) {
-        Shell_NotifyIconW(NIM_MODIFY, &nid);
-    }
+    refreshPalette();
 }
 
 DWORD WINAPI workerProc(LPVOID) {
@@ -298,8 +313,8 @@ void openSite(size_t idx) {
 
 void openSettings(HWND hwnd) {
     // One dialog at a time. The modal loop still dispatches this thread's
-    // messages, so a second request - another start, or the tray menu - would
-    // otherwise nest a second dialog on top of the first.
+    // messages, so a second request - another start, or the palette menu -
+    // would otherwise nest a second dialog on top of the first.
     if (sf::settingsDialogOpen()) {
         CPPDEBUG( "settings: dialog already open, raising it" );
         sf::raiseSettingsDialog();
@@ -325,46 +340,252 @@ void openSettings(HWND hwnd) {
     }
 }
 
-void showTrayMenu(HWND hwnd, size_t idx) {
+// --- palette window ---------------------------------------------------------
+//
+// Windows 11 drops new tray icons into the overflow flyout and no API can
+// promote one, so the app shows its own surface instead: one icon per site,
+// always on top, click to open, right-click for the menu.
+
+int paletteColumns(size_t count) {
+    if (count == 0) {
+        return 1;
+    }
+    return static_cast<int>(std::min<size_t>(count, static_cast<size_t>(kMaxColumns)));
+}
+
+SIZE paletteClientSize(size_t count) {
+    const int columns = paletteColumns(count);
+    const int rows = static_cast<int>(
+        (count + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns));
+    const int cell = kIconSize + kIconPad;
+
+    SIZE size = {};
+    size.cx = columns * cell + kIconPad;
+    size.cy = rows * cell + kIconPad;
+    return size;
+}
+
+size_t paletteCount() {
+    std::lock_guard<std::mutex> lk(g_sitesMutex);
+    return g_sites.size();
+}
+
+// Keeps the palette fully inside a monitor's work area. Needed because a
+// remembered position can point at a screen that is no longer attached, and
+// because growing near the right edge would otherwise push icons off the
+// desktop.
+void clampPaletteToWorkArea() {
+    if (!g_hPalette) {
+        return;
+    }
+
+    RECT window = {};
+    GetWindowRect(g_hPalette, &window);
+    const int width = window.right - window.left;
+    const int height = window.bottom - window.top;
+
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(MonitorFromWindow(g_hPalette, MONITOR_DEFAULTTONEAREST), &mi)) {
+        return;
+    }
+
+    int x = window.left;
+    int y = window.top;
+    if (x + width > mi.rcWork.right) {
+        x = mi.rcWork.right - width;
+    }
+    if (y + height > mi.rcWork.bottom) {
+        y = mi.rcWork.bottom - height;
+    }
+    if (x < mi.rcWork.left) {
+        x = mi.rcWork.left;
+    }
+    if (y < mi.rcWork.top) {
+        y = mi.rcWork.top;
+    }
+
+    if (x != window.left || y != window.top) {
+        SetWindowPos(g_hPalette, nullptr, x, y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+void resizePalette() {
+    if (!g_hPalette) {
+        return;
+    }
+
+    const SIZE size = paletteClientSize(paletteCount());
+    RECT r = { 0, 0, size.cx, size.cy };
+    AdjustWindowRectEx(&r, GetWindowLongW(g_hPalette, GWL_STYLE), FALSE,
+                       GetWindowLongW(g_hPalette, GWL_EXSTYLE));
+
+    SetWindowPos(g_hPalette, nullptr, 0, 0, r.right - r.left, r.bottom - r.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    clampPaletteToWorkArea();
+}
+
+void refreshPalette() {
+    if (g_hPalette) {
+        PostMessageW(g_hPalette, kIconsChangedMsg, 0, 0);
+    }
+}
+
+// Index of the cell under a client point, or -1.
+int paletteIndexAt(int x, int y) {
+    const int cell = kIconSize + kIconPad;
+    const int column = (x - kIconPad) / cell;
+    const int row = (y - kIconPad) / cell;
+    if (column < 0 || row < 0 || column >= kMaxColumns) {
+        return -1;
+    }
+
+    const size_t index = static_cast<size_t>(row) * kMaxColumns +
+                         static_cast<size_t>(column);
+    std::lock_guard<std::mutex> lk(g_sitesMutex);
+    return index < g_sites.size() ? static_cast<int>(index) : -1;
+}
+
+void showPaletteMenu(HWND palette, int index) {
+    const bool onIcon = index >= 0;
+
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, 1, L"Open");
+    AppendMenuW(menu, MF_STRING | (onIcon ? MF_ENABLED : MF_GRAYED), 1, L"Open");
+    AppendMenuW(menu, MF_STRING, 4, L"Update now");
     AppendMenuW(menu, MF_STRING, 3, L"Configure...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 2, L"Exit");
 
     POINT pt = {};
     GetCursorPos(&pt);
-    SetForegroundWindow(hwnd);
-    UINT cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
-                              pt.x, pt.y, 0, hwnd, nullptr);
+    SetForegroundWindow(palette);
+    const UINT cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                    pt.x, pt.y, 0, palette, nullptr);
     DestroyMenu(menu);
 
-    if (cmd == 1) {
-        openSite(idx);
+    if (cmd == 1 && onIcon) {
+        openSite(static_cast<size_t>(index));
+    } else if (cmd == 4) {
+        CPPDEBUG( "palette: refreshing every site on request" );
+        SetEvent(g_hRefresh);  // forces an immediate refresh of all sites
     } else if (cmd == 3) {
-        openSettings(hwnd);
+        openSettings(palette);
     } else if (cmd == 2) {
-        DestroyWindow(hwnd);
+        DestroyWindow(g_hwnd);
     }
+}
+
+LRESULT CALLBACK PaletteProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_PAINT: {
+            PAINTSTRUCT ps = {};
+            HDC dc = BeginPaint(hwnd, &ps);
+
+            RECT client = {};
+            GetClientRect(hwnd, &client);
+            FillRect(dc, &client, GetSysColorBrush(COLOR_BTNFACE));
+
+            std::lock_guard<std::mutex> lk(g_sitesMutex);
+            const int cell = kIconSize + kIconPad;
+            for (size_t i = 0; i < g_sites.size(); ++i) {
+                if (!g_sites[i].icon) {
+                    continue;
+                }
+                const int column = static_cast<int>(i) % kMaxColumns;
+                const int row = static_cast<int>(i) / kMaxColumns;
+                DrawIconEx(dc, kIconPad + column * cell, kIconPad + row * cell,
+                           g_sites[i].icon, kIconSize, kIconSize, 0, nullptr,
+                           DI_NORMAL);
+            }
+
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            const int index = paletteIndexAt(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            if (index >= 0) {
+                openSite(static_cast<size_t>(index));
+            }
+            return 0;
+        }
+        case WM_RBUTTONUP: {
+            const int index = paletteIndexAt(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+            showPaletteMenu(hwnd, index);
+            return 0;
+        }
+        case kIconsChangedMsg:
+            freeRetiredIcons();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_EXITSIZEMOVE: {
+            RECT r = {};
+            GetWindowRect(hwnd, &r);
+            sf::savePalettePos(r.left, r.top);
+            return 0;
+        }
+        case WM_CLOSE:
+            // The palette is the only surface, so closing it exits: hiding it
+            // would leave a process with nothing left to click.
+            DestroyWindow(g_hwnd);
+            return 0;
+        default:
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+}
+
+bool createPalette(HINSTANCE hInstance) {
+    WNDCLASSEXW pc = {};
+    pc.cbSize = sizeof(pc);
+    pc.lpfnWndProc = PaletteProc;
+    pc.hInstance = hInstance;
+    pc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    pc.lpszClassName = kPaletteClassName;
+
+    if (!RegisterClassExW(&pc)) {
+        CPPDEBUG( "startup: RegisterClassExW failed for the palette" );
+        return false;
+    }
+
+    // Topmost and out of Alt+Tab: the whole point is to stay reachable without
+    // the tray overflow.
+    const DWORD exStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+
+    const SIZE size = paletteClientSize(paletteCount());
+    RECT r = { 0, 0, size.cx, size.cy };
+    AdjustWindowRectEx(&r, style, FALSE, exStyle);
+    const int width = r.right - r.left;
+    const int height = r.bottom - r.top;
+
+    int x = 0;
+    int y = 0;
+    if (!sf::loadPalettePos(x, y)) {
+        RECT work = {};
+        SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        x = work.right - width - 12;
+        y = work.bottom - height - 12;
+    }
+
+    g_hPalette = CreateWindowExW(exStyle, kPaletteClassName, L"ShowFavicon", style,
+                                 x, y, width, height, nullptr, nullptr, hInstance,
+                                 nullptr);
+    if (!g_hPalette) {
+        CPPDEBUG( "startup: CreateWindowExW failed for the palette" );
+        return false;
+    }
+
+    clampPaletteToWorkArea();
+    ShowWindow(g_hPalette, SW_SHOWNOACTIVATE);
+    CPPDEBUG( "startup: palette shown" );
+    return true;
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-        case kTrayCallbackMsg: {
-            if (wParam < 1) {
-                return 0;
-            }
-            size_t idx = static_cast<size_t>(wParam) - 1;
-            if (lParam == WM_LBUTTONUP) {
-                openSite(idx);
-            } else if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
-                showTrayMenu(hwnd, idx);
-            }
-            return 0;
-        }
         case kShowSettingsMsg:
-            // A second start of the app asks this instance, which owns the tray
-            // icons, to show the dialog instead of growing its own.
+            // A second start of the app asks this instance, which owns the
+            // palette, to show the dialog instead of showing its own.
             CPPDEBUG( "instance: another start asked for the settings dialog" );
             openSettings(hwnd);
             return 0;
@@ -373,8 +594,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             SetEvent(g_hStop);
             {
                 std::lock_guard<std::mutex> lk(g_sitesMutex);
-                removeAllIcons();
+                destroyAllSites();
             }
+            freeRetiredIcons();
             PostQuitMessage(0);
             return 0;
         default:
@@ -406,8 +628,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g_hInstance = hInstance;
 
-    // One tray app per session. A second start does not add its own icons: it
-    // asks the running instance to show the settings dialog, then exits. The
+    // One instance per session. A second start does not open its own palette:
+    // it asks the running instance to show the settings dialog, then exits. The
     // mutex handle is deliberately never closed, so the object lives as long
     // as the process and the name stays taken.
     HANDLE hSingleInstance = CreateMutexW(nullptr, TRUE, kInstanceMutex);
@@ -452,8 +674,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
         return 1;
     }
 
-    // Real top-level window (not a message-only window) so broadcasts such as
-    // "TaskbarCreated" can be received later. It is never shown.
+    // Hidden top-level window: it exists for the second-start message and for
+    // the message loop, and is never shown. The palette below is what is seen.
     HWND hwnd = CreateWindowExW(
         0, kWindowClassName, L"ShowFavicon",
         WS_OVERLAPPEDWINDOW,
@@ -471,17 +693,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     g_hStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_hRefresh = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
-    {
-        std::lock_guard<std::mutex> lk(g_sitesMutex);
-        g_sites.reserve(urls.size());
-        for (size_t i = 0; i < urls.size(); ++i) {
-            Site site;
-            site.url = urls[i];
-            site.cacheFile = cacheFileFor(urls[i]);
-            addSiteIcon(site, i);
-            site.nextRefreshAt = 0;  // fetch immediately on startup
-            g_sites.push_back(std::move(site));
-        }
+    // The sites come first so the palette is already the right size when it is
+    // placed: a window that grows after being moved would hang off the screen
+    // edge it was placed against.
+    rebuildSites(urls);
+
+    if (!createPalette(hInstance)) {
+        sf::logShutdown();
+        CoUninitialize();
+        return 1;
     }
 
     HANDLE hWorker = CreateThread(nullptr, 0, workerProc, nullptr, 0, nullptr);
