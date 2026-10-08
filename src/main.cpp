@@ -30,6 +30,11 @@ constexpr UINT_PTR kPromoteTimerId = 1;
 constexpr int kPromoteTries = 4;
 constexpr UINT kPromoteRetryMs = 1200;
 constexpr wchar_t kInstanceMutex[] = L"ShowFavicon.SingleInstance";
+// A second start waits this long before it decides the name is really taken.
+// An instance that is shutting down keeps the name for a moment without owning
+// a window any more, and a click in that window must not do nothing.
+constexpr int kStartAttempts = 25;
+constexpr DWORD kStartRetryMs = 200;
 constexpr ULONGLONG kHourMs = 3600000ull;
 constexpr wchar_t kDefaultSite[] = L"https://github.com/";
 
@@ -38,6 +43,7 @@ struct Site {
     std::wstring cacheFile;
     UINT id = 0;  // slot identity, so a refresh that raced a rebuild is ignored
     NOTIFYICONDATAW nid = {};  // notification area icon, uID == id
+    bool trayAdded = false;    // NIM_ADD succeeded; retried on the timer if not
     HICON icon = nullptr;
     bool ownsIcon = false;
     ULONGLONG nextRefreshAt = 0;
@@ -113,8 +119,13 @@ void addTrayIcon(Site& site) {
     lstrcpynW(site.nid.szTip, tip.c_str(),
               static_cast<int>(sizeof(site.nid.szTip) / sizeof(site.nid.szTip[0])));
 
-    Shell_NotifyIconW(NIM_ADD, &site.nid);
-    CPPDEBUG( Tools::wformat( L"tray: added icon %u for %s", site.nid.uID, tip ) );
+    site.trayAdded = Shell_NotifyIconW(NIM_ADD, &site.nid) != FALSE;
+    if (site.trayAdded) {
+        CPPDEBUG( Tools::wformat( L"tray: added icon %u for %s", site.nid.uID, tip ) );
+    } else {
+        CPPDEBUG( Tools::wformat( L"tray: NIM_ADD failed for %u, retrying later",
+                                  site.nid.uID ) );
+    }
 }
 
 // Drop every site. Caller holds the lock.
@@ -130,12 +141,25 @@ void destroyAllSites() {
     g_sites.clear();
 }
 
-// Ask the shell to keep this executable's tray icons out of the overflow.
+// Ask the shell to keep this executable's tray icons out of the overflow. An
+// icon that could not be added yet is retried here too: NIM_ADD fails while the
+// shell is still coming up, which is what starting from the Run key runs into.
 void promoteTrayIcons() {
     const int promoted = sf::promoteNotificationIcons();
     if (promoted > 0) {
         CPPDEBUG( Tools::format( "tray: promoted %d notification icon(s)",
                                  promoted ) );
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(g_sitesMutex);
+        for (auto& site : g_sites) {
+            if (!site.trayAdded && site.nid.cbSize) {
+                site.trayAdded = Shell_NotifyIconW(NIM_ADD, &site.nid) != FALSE;
+                CPPDEBUG( Tools::format( "tray: retry for icon %u %s", site.nid.uID,
+                                         site.trayAdded ? "ok" : "failed" ) );
+            }
+        }
     }
 
     if (--g_promoteTriesLeft <= 0) {
@@ -387,9 +411,19 @@ void showTrayMenu(HWND owner, int index) {
 
     POINT pt = {};
     GetCursorPos(&pt);
+
+    // The tray icons sit on the bottom edge of the screen, so a menu that does
+    // not fit below the cursor is flipped up - and a flipped-up menu puts the
+    // cursor on its last row, which is Exit. A stray click there would end the
+    // process. Placing the menu above the cursor by roughly one extra row keeps
+    // the cursor outside it, so such a click only dismisses the menu.
+    const int rowHeight = GetSystemMetrics(SM_CYMENU) + 4;
+    const int height = (static_cast<int>(GetMenuItemCount(menu)) + 1) * rowHeight;
+    const LONG top = std::max<LONG>(0, pt.y - height);
+
     SetForegroundWindow(owner);
     const UINT cmd = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
-                                    pt.x, pt.y, 0, owner, nullptr);
+                                    pt.x, top, 0, owner, nullptr);
     DestroyMenu(menu);
     // The owner is a hidden window, so it can never really become the foreground
     // one. Posting anything afterwards is what makes the menu close when the
@@ -404,6 +438,7 @@ void showTrayMenu(HWND owner, int index) {
     } else if (cmd == 3) {
         openSettings(owner);
     } else if (cmd == 2) {
+        CPPDEBUG( "tray: exit requested from the menu" );
         DestroyWindow(g_hwnd);
     }
 }
@@ -433,6 +468,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // of starting a second set of tray icons.
             CPPDEBUG( "instance: another start asked for the settings dialog" );
             openSettings(hwnd);
+            return 0;
+        case WM_CLOSE:
+            // Only the tray menu's Exit may end the process. Anything else that
+            // closes this window (the taskbar's Close window, for instance)
+            // would otherwise destroy it through DefWindowProc and take the
+            // tray icons down with it, silently.
+            CPPDEBUG( "ui: WM_CLOSE ignored - use Exit on the tray menu" );
             return 0;
         case WM_DESTROY:
             CPPDEBUG( "shutdown: window destroyed" );
@@ -472,22 +514,38 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g_hInstance = hInstance;
 
-    // One instance per session. A second start does not add a second set of
-    // icons: it asks the running instance to show the settings dialog, then
-    // exits. The mutex handle is deliberately never closed, so the object lives
-    // as long as the process and the name stays taken.
-    HANDLE hSingleInstance = CreateMutexW(nullptr, TRUE, kInstanceMutex);
-    if (hSingleInstance && GetLastError() == ERROR_ALREADY_EXISTS) {
-        CPPDEBUG( "instance: already running, asking it for the settings dialog" );
+    // One instance per session. A second start hands over to the running one and
+    // exits. The name is waited for rather than given up on: it is held for a
+    // moment by an instance that is shutting down, and reporting "already
+    // running" when there is no window left to ask would make the click look
+    // like it did nothing and the icons would stay away.
+    HANDLE hSingleInstance = nullptr;
+    for (int attempt = 0; attempt < kStartAttempts; ++attempt) {
+        hSingleInstance = CreateMutexW(nullptr, TRUE, kInstanceMutex);
+        if (!hSingleInstance || GetLastError() != ERROR_ALREADY_EXISTS) {
+            break;  // the name is ours: this is the instance that runs
+        }
+
         HWND running = FindWindowW(kWindowClassName, nullptr);
         if (running) {
+            CPPDEBUG( "instance: already running, asking it for the settings dialog" );
             PostMessageW(running, kShowSettingsMsg, 0, 0);
-        } else {
-            CPPDEBUG( "instance: found no window to ask" );
+            sf::logShutdown();
+            CoUninitialize();
+            return 0;
         }
+
+        CPPDEBUG( "instance: name is taken but no window yet, waiting" );
+        CloseHandle(hSingleInstance);
+        hSingleInstance = nullptr;
+        Sleep(kStartRetryMs);
+    }
+
+    if (!hSingleInstance) {
+        CPPDEBUG( "startup: the single-instance name stays taken, giving up" );
         sf::logShutdown();
         CoUninitialize();
-        return 0;
+        return 1;
     }
 
     // Nothing configured means a first run: seed the default site, then open
@@ -562,8 +620,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     CPPDEBUG( "shutdown: message loop ended" );
 
     SetEvent(g_hStop);
-    WaitForSingleObject(hWorker, 30000);
-    WaitForSingleObject(hNet, 5000);
+    WaitForSingleObject(hWorker, 5000);
+    WaitForSingleObject(hNet, 1000);
     CloseHandle(hWorker);
     CloseHandle(hNet);
     CloseHandle(g_hStop);
