@@ -22,6 +22,10 @@ namespace {
 HWND g_dlg = nullptr;
 std::vector<std::wstring>* g_sites = nullptr;
 
+// Row currently loaded into the URL field for editing, or -1 when the field is
+// used to add a new entry. The Edit button and a double-click on a row set it.
+int g_editIndex = -1;
+
 void addUrl(HWND dlg, const std::wstring& url);
 void addDroppedText(HWND dlg, const wchar_t* text);
 
@@ -128,6 +132,46 @@ void addDroppedText(HWND dlg, const wchar_t* text) {
     }
 }
 
+// Load the selected row into the URL field and switch the Add button into its
+// Save role. Shared by the Edit button and a double-click on a row.
+void beginEdit(HWND dlg) {
+    LRESULT sel = SendDlgItemMessageW(dlg, IDC_SITE_LIST, LB_GETCURSEL, 0, 0);
+    if (sel == LB_ERR) {
+        return;  // nothing selected
+    }
+
+    int len = static_cast<int>(
+        SendDlgItemMessageW(dlg, IDC_SITE_LIST, LB_GETTEXTLEN, sel, 0));
+    if (len <= 0) {
+        return;
+    }
+
+    std::wstring text(static_cast<size_t>(len) + 1, L'\0');
+    SendDlgItemMessageW(dlg, IDC_SITE_LIST, LB_GETTEXT, sel,
+                        reinterpret_cast<LPARAM>(text.data()));
+    text.resize(static_cast<size_t>(len));
+
+    g_editIndex = static_cast<int>(sel);
+    SetDlgItemTextW(dlg, IDC_SITE_EDIT, text.c_str());
+    SetDlgItemTextW(dlg, IDC_ADD, L"&Save");
+
+    // Put the caret in the field with the whole URL selected, so typing
+    // replaces it.
+    HWND edit = GetDlgItem(dlg, IDC_SITE_EDIT);
+    SetFocus(edit);
+    SendMessageW(edit, EM_SETSEL, 0, -1);
+
+    CPPDEBUG( Tools::format( "settings: editing index %d (%s)",
+                             g_editIndex, wideToUtf8(text) ) );
+}
+
+// Leave edit mode: the field goes back to adding a new entry.
+void endEdit(HWND dlg) {
+    g_editIndex = -1;
+    SetDlgItemTextW(dlg, IDC_SITE_EDIT, L"");
+    SetDlgItemTextW(dlg, IDC_ADD, L"&Add");
+}
+
 bool endsWithIgnoreCase(const std::wstring& s, const wchar_t* suffix) {
     size_t n = std::wcslen(suffix);
     if (s.size() < n) {
@@ -146,6 +190,7 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
     switch (msg) {
         case WM_INITDIALOG: {
             g_dlg = hwnd;
+            g_editIndex = -1;
             for (const auto& s : *g_sites) {
                 SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_ADDSTRING, 0,
                                     reinterpret_cast<LPARAM>(s.c_str()));
@@ -157,14 +202,42 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
         }
 
         case WM_COMMAND:
+            // A double-click on a row edits it, exactly like the Edit button.
+            if (LOWORD(wParam) == IDC_SITE_LIST && HIWORD(wParam) == LBN_DBLCLK) {
+                beginEdit(hwnd);
+                return TRUE;
+            }
             switch (LOWORD(wParam)) {
                 case IDC_ADD: {
                     wchar_t buf[2048] = {};
                     GetDlgItemTextW(hwnd, IDC_SITE_EDIT, buf, 2048);
-                    addUrl(hwnd, buf);
-                    SetDlgItemTextW(hwnd, IDC_SITE_EDIT, L"");
+                    std::wstring u = trim(buf);
+                    if (u.empty()) {
+                        return TRUE;
+                    }
+                    if (g_editIndex >= 0 &&
+                        static_cast<size_t>(g_editIndex) < g_sites->size()) {
+                        // Save: replace the row that Edit / double-click loaded.
+                        (*g_sites)[static_cast<size_t>(g_editIndex)] = u;
+                        SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_DELETESTRING,
+                                            static_cast<WPARAM>(g_editIndex), 0);
+                        SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_INSERTSTRING,
+                                            static_cast<WPARAM>(g_editIndex),
+                                            reinterpret_cast<LPARAM>(u.c_str()));
+                        SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_SETCURSEL,
+                                            static_cast<WPARAM>(g_editIndex), 0);
+                        CPPDEBUG( Tools::format( "settings: updated index %d to %s",
+                                                 g_editIndex, wideToUtf8(u) ) );
+                        endEdit(hwnd);
+                    } else {
+                        addUrl(hwnd, buf);
+                        SetDlgItemTextW(hwnd, IDC_SITE_EDIT, L"");
+                    }
                     return TRUE;
                 }
+                case IDC_EDIT_SITE:
+                    beginEdit(hwnd);
+                    return TRUE;
                 case IDC_REMOVE: {
                     LRESULT sel =
                         SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_GETCURSEL, 0, 0);
@@ -174,6 +247,13 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
                         SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_DELETESTRING,
                                             static_cast<WPARAM>(sel), 0);
                         g_sites->erase(g_sites->begin() + static_cast<size_t>(sel));
+                        // Keep the edit target on the same URL, or leave edit
+                        // mode when that very row was the one being edited.
+                        if (g_editIndex == static_cast<int>(sel)) {
+                            endEdit(hwnd);
+                        } else if (g_editIndex > static_cast<int>(sel)) {
+                            --g_editIndex;
+                        }
                     }
                     return TRUE;
                 }
@@ -230,6 +310,7 @@ int showSettingsDialog(HINSTANCE hInstance, HWND owner,
                                   SettingsProc, 0);
     g_sites = nullptr;
     g_dlg = nullptr;
+    g_editIndex = -1;
     return static_cast<int>(res);
 }
 
