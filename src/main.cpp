@@ -504,6 +504,27 @@ void refreshPalette() {
     }
 }
 
+// The notification area icons are the app's other surface, so the palette can be
+// put away without quitting. A hidden window has no taskbar button, so the tray
+// menu - and a second start - are how it comes back.
+void showPalette() {
+    if (!g_hPalette) {
+        return;
+    }
+    ShowWindow(g_hPalette, SW_SHOWNOACTIVATE);
+    SetWindowPos(g_hPalette, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    CPPDEBUG( "palette: shown" );
+}
+
+void hidePalette() {
+    if (!g_hPalette) {
+        return;
+    }
+    ShowWindow(g_hPalette, SW_HIDE);
+    CPPDEBUG( "palette: hidden, the tray menu brings it back" );
+}
+
 // Index of the cell under a client point, or -1.
 int paletteIndexAt(int x, int y) {
     const int cell = kIconSize + kIconPad;
@@ -527,6 +548,8 @@ void showPaletteMenu(HWND palette, int index) {
     AppendMenuW(menu, MF_STRING, 4, L"Update now");
     AppendMenuW(menu, MF_STRING, 3, L"Configure...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 5,
+                IsWindowVisible(g_hPalette) ? L"Hide palette" : L"Show palette");
     AppendMenuW(menu, MF_STRING, 2, L"Exit");
 
     POINT pt = {};
@@ -543,6 +566,12 @@ void showPaletteMenu(HWND palette, int index) {
         SetEvent(g_hRefresh);  // forces an immediate refresh of all sites
     } else if (cmd == 3) {
         openSettings(palette);
+    } else if (cmd == 5) {
+        if (IsWindowVisible(g_hPalette)) {
+            hidePalette();
+        } else {
+            showPalette();
+        }
     } else if (cmd == 2) {
         DestroyWindow(g_hwnd);
     }
@@ -597,9 +626,9 @@ LRESULT CALLBACK PaletteProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
         case WM_CLOSE:
-            // The palette is the only surface, so closing it exits: hiding it
-            // would leave a process with nothing left to click.
-            DestroyWindow(g_hwnd);
+            // The tray icons outlive the palette, so closing it only puts it
+            // away. Exit on the tray menu is what quits.
+            hidePalette();
             return 0;
         default:
             return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -620,9 +649,9 @@ bool createPalette(HINSTANCE hInstance) {
     }
 
     // Topmost, so it stays reachable without the tray overflow. Deliberately
-    // without WS_EX_TOOLWINDOW: the palette is the app's only window, so it
-    // gets a taskbar button and an Alt+Tab entry like any other program, which
-    // is also how it is found again if it ends up behind something.
+    // without WS_EX_TOOLWINDOW: while the palette is visible it gets a taskbar
+    // button and an Alt+Tab entry like any other program. Closing it hides it,
+    // and the tray menu brings it back.
     const DWORD exStyle = WS_EX_TOPMOST;
     const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
 
@@ -676,9 +705,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
         case kShowSettingsMsg:
-            // A second start of the app asks this instance, which owns the
-            // palette, to show the dialog instead of showing its own.
+            // A second start asks this instance to show itself. The palette comes
+            // back and the dialog opens, which is the one thing the taskbar
+            // button of a hidden window cannot do.
             CPPDEBUG( "instance: another start asked for the settings dialog" );
+            showPalette();
             openSettings(hwnd);
             return 0;
         case WM_DESTROY:
