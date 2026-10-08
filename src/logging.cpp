@@ -4,6 +4,8 @@
 #include "AsyncFileLogger.h"
 #include "AsyncOutDebug.h"
 
+#include "util.h"
+
 #include <CpputilsDebug.h>
 
 #include <windows.h>
@@ -59,6 +61,9 @@ void attachConsole() {
 // The backend loop. Every backend's semaphore is released by every message, so
 // waiting on one of them is enough to know that anything arrived.
 void run() {
+    // Identifiable as "logger" in the debugger, next to main/worker/network.
+    nameCurrentThread(L"logger");
+
     AsyncOut::Logger* primary = g_file
                                     ? static_cast<AsyncOut::Logger*>(g_file.get())
                                     : g_console.get();

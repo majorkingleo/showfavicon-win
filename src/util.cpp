@@ -233,6 +233,12 @@ std::string wideToUtf8(const std::wstring& s) {
     return out;
 }
 
+void nameCurrentThread(const wchar_t* name) {
+    // Available since Windows 10 1607; on anything older the call just fails,
+    // which costs nothing.
+    SetThreadDescription(GetCurrentThread(), name);
+}
+
 std::vector<std::string> findIconLinkHrefs(const std::string& html) {
     std::vector<std::string> hrefs;
     size_t pos = 0;

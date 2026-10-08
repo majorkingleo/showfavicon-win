@@ -189,6 +189,7 @@ void refreshSite(size_t idx) {
 }
 
 DWORD WINAPI workerProc(LPVOID) {
+    sf::nameCurrentThread(L"worker");
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     for (;;) {
@@ -227,6 +228,7 @@ DWORD WINAPI workerProc(LPVOID) {
 }
 
 DWORD WINAPI networkProc(LPVOID) {
+    sf::nameCurrentThread(L"network");
     for (;;) {
         if (WaitForSingleObject(g_hStop, 0) == WAIT_OBJECT_0) break;
 
@@ -327,6 +329,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
                     PWSTR /*pCmdLine*/, int /*nCmdShow*/) {
+    sf::nameCurrentThread(L"main");
+
     // A WIN32 GUI program has no console of its own, so `-d` is how the log
     // becomes visible there. Every message also goes to the log file.
     int argc = 0;
