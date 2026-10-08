@@ -24,6 +24,7 @@ namespace {
 constexpr wchar_t kWindowClassName[] = L"ShowFaviconMainWindow";
 constexpr UINT kTrayCallbackMsg = WM_APP + 1;
 constexpr ULONGLONG kHourMs = 3600000ull;
+constexpr wchar_t kDefaultSite[] = L"https://github.com/";
 
 struct Site {
     std::wstring url;
@@ -302,7 +303,7 @@ void openSettings(HWND hwnd) {
         }
     }
     if (urls.empty()) {
-        urls.push_back(L"https://github.com/");
+        urls.push_back(kDefaultSite);
     }
 
     int res = sf::showSettingsDialog(g_hInstance, hwnd, urls);
@@ -388,9 +389,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g_hInstance = hInstance;
 
+    // Nothing configured means a first run: seed the default site, then open
+    // the settings dialog (below) so it can be changed straight away.
     std::vector<std::wstring> urls = sf::loadSites();
-    if (urls.empty()) {
-        urls.push_back(L"https://github.com/");
+    const bool firstRun = urls.empty();
+    if (firstRun) {
+        urls.push_back(kDefaultSite);
+        CPPDEBUG( "config: first run, seeding the default site" );
     }
 
     CPPDEBUG( Tools::format( "config: %d site(s)", static_cast<int>(urls.size()) ) );
@@ -448,6 +453,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     HANDLE hNet = CreateThread(nullptr, 0, networkProc, nullptr, 0, nullptr);
 
     CPPDEBUG( "startup: running" );
+
+    if (firstRun) {
+        // Save the seed before showing the dialog: if it is cancelled the
+        // default site is still configured, instead of coming back to an empty
+        // configuration - and to this dialog - on every start.
+        sf::saveSites(urls);
+        openSettings(g_hwnd);
+    }
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
