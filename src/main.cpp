@@ -547,9 +547,11 @@ bool createPalette(HINSTANCE hInstance) {
         return false;
     }
 
-    // Topmost and out of Alt+Tab: the whole point is to stay reachable without
-    // the tray overflow.
-    const DWORD exStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+    // Topmost, so it stays reachable without the tray overflow. Deliberately
+    // without WS_EX_TOOLWINDOW: the palette is the app's only window, so it
+    // gets a taskbar button and an Alt+Tab entry like any other program, which
+    // is also how it is found again if it ends up behind something.
+    const DWORD exStyle = WS_EX_TOPMOST;
     const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
 
     const SIZE size = paletteClientSize(paletteCount());
