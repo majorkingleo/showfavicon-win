@@ -109,7 +109,7 @@ void addUrl(HWND dlg, const std::wstring& url) {
     SendDlgItemMessageW(dlg, IDC_SITE_LIST, LB_ADDSTRING, 0,
                         reinterpret_cast<LPARAM>(u.c_str()));
 
-    CPPDEBUG( Tools::format( "settings: added %s", wideToUtf8(u) ) );
+    CPPDEBUG( Tools::wformat( L"settings: added %s", u ) );
 }
 
 void addDroppedText(HWND dlg, const wchar_t* text) {
@@ -161,8 +161,8 @@ void beginEdit(HWND dlg) {
     SetFocus(edit);
     SendMessageW(edit, EM_SETSEL, 0, -1);
 
-    CPPDEBUG( Tools::format( "settings: editing index %d (%s)",
-                             g_editIndex, wideToUtf8(text) ) );
+    CPPDEBUG( Tools::wformat( L"settings: editing index %d (%s)",
+                              g_editIndex, text ) );
 }
 
 // Leave edit mode: the field goes back to adding a new entry.
@@ -226,8 +226,8 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
                                             reinterpret_cast<LPARAM>(u.c_str()));
                         SendDlgItemMessageW(hwnd, IDC_SITE_LIST, LB_SETCURSEL,
                                             static_cast<WPARAM>(g_editIndex), 0);
-                        CPPDEBUG( Tools::format( "settings: updated index %d to %s",
-                                                 g_editIndex, wideToUtf8(u) ) );
+                        CPPDEBUG( Tools::wformat( L"settings: updated index %d to %s",
+                                                  g_editIndex, u ) );
                         endEdit(hwnd);
                     } else {
                         addUrl(hwnd, buf);

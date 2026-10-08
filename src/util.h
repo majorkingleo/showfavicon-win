@@ -23,12 +23,15 @@ std::wstring trim(const std::wstring& s);
 
 // UTF-8 <-> wide, built on cpputils' Tools::Utf8Util (src/cpputils) rather than
 // the Win32 code page calls. Utf8Util is strict - it throws utf8::invalid_utf8 /
-// invalid_utf16 - but every string that goes through here is untrusted: a
-// hand-editable sites.txt, the bytes of a fetched page, a URL typed into the
-// dialog. An exception escaping the worker thread would call std::terminate, so
-// these two never throw; malformed input becomes U+FFFD.
+// invalid_utf16 - but every string that goes through here comes from somewhere
+// untrusted: the hand-editable sites.txt, href bytes scraped from a fetched page
+// (converted on the worker thread, where an escaping exception would call
+// std::terminate), a URL typed into the dialog. These two therefore never throw.
+//
+// Log messages do not go through here at all: CPPDEBUG takes wide strings
+// directly, and the backends convert them with Tools::Utf8Util themselves.
 std::wstring utf8ToWide(const std::string& s);
-std::string wideToUtf8(const std::wstring& s);  // for log messages (always UTF-8)
+std::string wideToUtf8(const std::wstring& s);  // sites.txt on disk is UTF-8
 
 // Names the calling thread, so it is identifiable in the debugger and in
 // Process Explorer.

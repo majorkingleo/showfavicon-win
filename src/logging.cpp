@@ -61,6 +61,40 @@ void attachConsole() {
     }
 }
 
+// A backend must never be able to kill this thread: an exception escaping it
+// would call std::terminate and take the whole process with it. Both backends
+// convert wide text, which can throw, so swallowing here costs the batch the
+// backend had popped - not the process, and not all further logging.
+void drainConsole() {
+    if (!g_console) {
+        return;
+    }
+    try {
+        g_console->log();
+    } catch (...) {
+    }
+}
+
+void drainFile() {
+    if (!g_file) {
+        return;
+    }
+    try {
+        g_file->log();
+    } catch (...) {
+    }
+}
+
+void flushFile() {
+    if (!g_file) {
+        return;
+    }
+    try {
+        g_file->flush();
+    } catch (...) {
+    }
+}
+
 // The backend loop. Every backend's semaphore is released by every message, so
 // waiting on one of them is enough to know that anything arrived.
 void run() {
@@ -74,17 +108,11 @@ void run() {
     auto next_flush = std::chrono::steady_clock::now() + kFlushInterval;
 
     while (!g_quit) {
-        if (g_console) {
-            g_console->log();
-        }
-        if (g_file) {
-            g_file->log();
-        }
+        drainConsole();
+        drainFile();
 
         if (std::chrono::steady_clock::now() > next_flush) {
-            if (g_file) {
-                g_file->flush();
-            }
+            flushFile();
             next_flush = std::chrono::steady_clock::now() + kFlushInterval;
         }
 
@@ -96,12 +124,8 @@ void run() {
     }
 
     // Final drain, while the backends are still alive.
-    if (g_console) {
-        g_console->log();
-    }
-    if (g_file) {
-        g_file->log();
-    }
+    drainConsole();
+    drainFile();
 }
 
 // std::ofstream::open takes a narrow path, which on Windows is interpreted in

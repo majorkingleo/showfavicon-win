@@ -3,6 +3,7 @@
  * @author Copyright (c) 2023 Martin Oberzalek
  */
 #include "AsyncOutDebug.h"
+#include <utf8_util.h>
 #include <filesystem>
 #include <iostream>
 
@@ -77,7 +78,7 @@ void AsyncOut::Logger::log()
 		}
 
 		if( !prefix.empty() ) {
-			 std::cout << color_output( m.color, DetectLocale::w2out(m.prefix) );
+			 std::cout << color_output( m.color, Utf8Util::wStringToUtf8(m.prefix) );
 			 std::cout << " ";
 		}
 
@@ -86,7 +87,14 @@ void AsyncOut::Logger::log()
 		if( const auto str_ptr (std::get_if<std::string>(&m.message)); str_ptr) {
 			message = *str_ptr;
 		} else {
-			message = DetectLocale::w2out(std::get<std::wstring>(m.message));
+			// Deliberately not DetectLocale::w2out(): our attachConsole() sets the
+			// console output code page to UTF-8, so UTF-8 is the correct encoding
+			// here. w2out() converts to the CRT locale encoding instead, and on
+			// MinGW its iconv path is broken: setlocale() reports "1252", which
+			// libiconv does not know (it wants CP1252), and ReadFile::convert then
+			// calls iconv_close() on the invalid handle (iconv_t)-1, corrupting the
+			// heap. Every wide message used to die there.
+			message = Utf8Util::wStringToUtf8(std::get<std::wstring>(m.message));
 		}
 
 		std::cout << message << '\n';

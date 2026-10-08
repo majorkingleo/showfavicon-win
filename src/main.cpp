@@ -104,8 +104,8 @@ void addSiteIcon(Site& site, size_t index) {
               sizeof(site.nid.szTip) / sizeof(site.nid.szTip[0]));
     Shell_NotifyIconW(NIM_ADD, &site.nid);
 
-    CPPDEBUG( Tools::format( "tray: added icon %u for %s",
-                             site.nid.uID, sf::wideToUtf8(tip) ) );
+    CPPDEBUG( Tools::wformat( L"tray: added icon %u for %s",
+                              site.nid.uID, tip ) );
 }
 
 // Remove and destroy all tray icons. Caller holds the lock.
@@ -155,7 +155,7 @@ void refreshSite(size_t idx) {
         uID = g_sites[idx].nid.uID;
     }
 
-    CPPDEBUG( Tools::format( "refresh: site %u %s", uID, sf::wideToUtf8(url) ) );
+    CPPDEBUG( Tools::wformat( L"refresh: site %u %s", uID, url ) );
 
     if (!networkAvailable()) {
         CPPDEBUG( Tools::format( "refresh: no network, site %u deferred", uID ) );
@@ -288,7 +288,7 @@ void openSite(size_t idx) {
         }
     }
     if (!url.empty()) {
-        CPPDEBUG( Tools::format( "site: opening %s", sf::wideToUtf8(url) ) );
+        CPPDEBUG( Tools::wformat( L"site: opening %s", url ) );
         ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
 }
@@ -382,9 +382,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     const std::wstring logFile = sf::appDataDir() + L"\\showfavicon.log";
     sf::logInit(logFile, console);
 
-    CPPDEBUG( Tools::format( "ShowFavicon starting (console=%s, log=%s)",
-                             console ? "yes" : "no",
-                             sf::wideToUtf8(logFile) ) );
+    CPPDEBUG( Tools::wformat( L"ShowFavicon starting (console=%s, log=%s)",
+                              console ? L"yes" : L"no", logFile ) );
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g_hInstance = hInstance;
@@ -396,7 +395,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
 
     CPPDEBUG( Tools::format( "config: %d site(s)", static_cast<int>(urls.size()) ) );
     for (const auto& u : urls) {
-        CPPDEBUG( Tools::format( "config: site %s", sf::wideToUtf8(u) ) );
+        CPPDEBUG( Tools::wformat( L"config: site %s", u ) );
     }
 
     WNDCLASSEXW wc = {};

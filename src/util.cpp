@@ -283,10 +283,10 @@ std::string wideToUtf8(const std::wstring& s) {
     try {
         return Tools::Utf8Util::wStringToUtf8(s);
     } catch (const std::exception&) {
-        // An unpaired surrogate makes Utf8Util throw utf8::invalid_utf16. This
-        // only ever feeds log lines: dropping the message would be worse, and
-        // letting the exception escape (the worker thread logs) would call
-        // std::terminate. Substituting every surrogate keeps it valid UTF-16.
+        // An unpaired surrogate makes Utf8Util throw utf8::invalid_utf16. The
+        // only caller writes sites.txt from the settings dialog, where an
+        // escaping exception would unwind out of the window procedure, so
+        // substitute the surrogates and keep a usable file.
         std::wstring clean = s;
         for (wchar_t& c : clean) {
             if (c >= 0xD800 && c <= 0xDFFF) {
