@@ -3,7 +3,13 @@
 #include <windows.h>
 #include <shlobj.h>
 
+// cpputils ships the UTF-8 conversions (src/cpputils, see src/tools_config.h).
+// Utf8Util is strict, so the two wrappers below pair it with replace_invalid.
+#include <utf8.h>
+#include <utf8_util.h>
+
 #include <algorithm>
+#include <exception>
 
 namespace sf {
 namespace {
@@ -264,28 +270,31 @@ std::wstring utf8ToWide(const std::string& s) {
     if (s.empty()) {
         return {};
     }
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    if (n <= 0) {
-        return {};
-    }
-    std::wstring out(n, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), n);
-    return out;
+    // Utf8Util would throw utf8::invalid_utf8 here; replace_invalid hands it
+    // valid UTF-8, with bad sequences becoming U+FFFD - what the
+    // MultiByteToWideChar call this replaces used to produce.
+    return Tools::Utf8Util::utf8toWString(utf8::replace_invalid(s));
 }
 
 std::string wideToUtf8(const std::wstring& s) {
     if (s.empty()) {
         return {};
     }
-    int n = WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
-                                nullptr, 0, nullptr, nullptr);
-    if (n <= 0) {
-        return {};
+    try {
+        return Tools::Utf8Util::wStringToUtf8(s);
+    } catch (const std::exception&) {
+        // An unpaired surrogate makes Utf8Util throw utf8::invalid_utf16. This
+        // only ever feeds log lines: dropping the message would be worse, and
+        // letting the exception escape (the worker thread logs) would call
+        // std::terminate. Substituting every surrogate keeps it valid UTF-16.
+        std::wstring clean = s;
+        for (wchar_t& c : clean) {
+            if (c >= 0xD800 && c <= 0xDFFF) {
+                c = L'?';
+            }
+        }
+        return Tools::Utf8Util::wStringToUtf8(clean);
     }
-    std::string out(n, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()),
-                        out.data(), n, nullptr, nullptr);
-    return out;
 }
 
 void nameCurrentThread(const wchar_t* name) {
@@ -376,16 +385,7 @@ void saveSites(const std::vector<std::wstring>& sites) {
         if (line.empty()) {
             continue;
         }
-        int n = WideCharToMultiByte(CP_UTF8, 0, line.data(),
-                                    static_cast<int>(line.size()), nullptr, 0,
-                                    nullptr, nullptr);
-        if (n <= 0) {
-            continue;
-        }
-        std::string utf8(n, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, line.data(), static_cast<int>(line.size()),
-                            utf8.data(), n, nullptr, nullptr);
-        bytes += utf8;
+        bytes += wideToUtf8(line);
         bytes += "\r\n";
     }
 

@@ -20,6 +20,13 @@ std::wstring originRoot(const Url& u);
 std::wstring hostFromUrl(const std::wstring& url);
 
 std::wstring trim(const std::wstring& s);
+
+// UTF-8 <-> wide, built on cpputils' Tools::Utf8Util (src/cpputils) rather than
+// the Win32 code page calls. Utf8Util is strict - it throws utf8::invalid_utf8 /
+// invalid_utf16 - but every string that goes through here is untrusted: a
+// hand-editable sites.txt, the bytes of a fetched page, a URL typed into the
+// dialog. An exception escaping the worker thread would call std::terminate, so
+// these two never throw; malformed input becomes U+FFFD.
 std::wstring utf8ToWide(const std::string& s);
 std::string wideToUtf8(const std::wstring& s);  // for log messages (always UTF-8)
 
