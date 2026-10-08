@@ -297,6 +297,15 @@ void openSite(size_t idx) {
 }
 
 void openSettings(HWND hwnd) {
+    // One dialog at a time. The modal loop still dispatches this thread's
+    // messages, so a second request - another start, or the tray menu - would
+    // otherwise nest a second dialog on top of the first.
+    if (sf::settingsDialogOpen()) {
+        CPPDEBUG( "settings: dialog already open, raising it" );
+        sf::raiseSettingsDialog();
+        return;
+    }
+
     std::vector<std::wstring> urls;
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);

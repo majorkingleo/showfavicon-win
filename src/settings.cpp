@@ -188,6 +188,29 @@ void applyAutoStart(HWND dlg) {
                               wanted ? L"enabled" : L"disabled" ) );
 }
 
+// ShowFavicon owns no visible window, so a dialog it creates can end up behind
+// whatever is in front. Attaching to the foreground thread first is what makes
+// SetForegroundWindow take effect from a message handler.
+void bringToFront(HWND hwnd) {
+    HWND foreground = GetForegroundWindow();
+    const DWORD foregroundThread =
+        foreground ? GetWindowThreadProcessId(foreground, nullptr) : 0;
+    const DWORD thisThread = GetCurrentThreadId();
+    const bool attach = foregroundThread != 0 && foregroundThread != thisThread;
+
+    if (attach) {
+        AttachThreadInput(foregroundThread, thisThread, TRUE);
+    }
+
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+    SetFocus(hwnd);
+
+    if (attach) {
+        AttachThreadInput(foregroundThread, thisThread, FALSE);
+    }
+}
+
 bool endsWithIgnoreCase(const std::wstring& s, const wchar_t* suffix) {
     size_t n = std::wcslen(suffix);
     if (s.size() < n) {
@@ -216,6 +239,7 @@ INT_PTR CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM /*lPara
             DragAcceptFiles(hwnd, TRUE);
             g_dropTarget = new TextDropTarget(hwnd);
             RegisterDragDrop(hwnd, g_dropTarget);
+            bringToFront(hwnd);
             return TRUE;
         }
 
@@ -331,6 +355,16 @@ int showSettingsDialog(HINSTANCE hInstance, HWND owner,
     g_dlg = nullptr;
     g_editIndex = -1;
     return static_cast<int>(res);
+}
+
+bool settingsDialogOpen() {
+    return g_dlg != nullptr;
+}
+
+void raiseSettingsDialog() {
+    if (g_dlg != nullptr) {
+        bringToFront(g_dlg);
+    }
 }
 
 }  // namespace sf
