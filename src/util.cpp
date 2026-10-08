@@ -408,6 +408,11 @@ constexpr wchar_t kSettingsKey[] = L"Software\\ShowFavicon";
 constexpr wchar_t kPaletteXValue[] = L"PaletteX";
 constexpr wchar_t kPaletteYValue[] = L"PaletteY";
 
+// Where the shell remembers the notification-area choices, one subkey per icon.
+constexpr wchar_t kNotifyIconKey[] = L"Control Panel\\NotifyIconSettings";
+constexpr wchar_t kIconPathValue[] = L"ExecutablePath";
+constexpr wchar_t kIconPromotedValue[] = L"IsPromoted";
+
 std::wstring executablePath() {
     wchar_t buf[MAX_PATH] = {};
     const DWORD cap = static_cast<DWORD>(sizeof(buf) / sizeof(buf[0]));
@@ -515,6 +520,68 @@ void savePalettePos(int x, int y) {
                    reinterpret_cast<const BYTE*>(&value_y), sizeof(value_y));
 
     RegCloseKey(key);
+}
+
+int promoteNotificationIcons() {
+    const std::wstring exe = executablePath();
+    if (exe.empty()) {
+        return 0;
+    }
+
+    HKEY root = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kNotifyIconKey, 0,
+                      KEY_ENUMERATE_SUB_KEYS, &root) != ERROR_SUCCESS) {
+        return 0;
+    }
+
+    int changed = 0;
+    for (DWORD i = 0;; ++i) {
+        wchar_t name[256] = {};
+        DWORD nameLen = static_cast<DWORD>(sizeof(name) / sizeof(name[0]));
+        if (RegEnumKeyExW(root, i, name, &nameLen, nullptr, nullptr, nullptr,
+                          nullptr) != ERROR_SUCCESS) {
+            break;
+        }
+
+        HKEY item = nullptr;
+        if (RegOpenKeyExW(root, name, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &item) !=
+            ERROR_SUCCESS) {
+            continue;
+        }
+
+        wchar_t path[2 * MAX_PATH] = {};
+        DWORD size = sizeof(path);
+        DWORD type = 0;
+        const bool ours =
+            RegQueryValueExW(item, kIconPathValue, nullptr, &type,
+                             reinterpret_cast<BYTE*>(path),
+                             &size) == ERROR_SUCCESS &&
+            type == REG_SZ && lstrcmpiW(path, exe.c_str()) == 0;
+
+        if (ours) {
+            DWORD promoted = 0;
+            DWORD valueSize = sizeof(promoted);
+            const bool already =
+                RegQueryValueExW(item, kIconPromotedValue, nullptr, &type,
+                                 reinterpret_cast<BYTE*>(&promoted),
+                                 &valueSize) == ERROR_SUCCESS &&
+                type == REG_DWORD && promoted != 0;
+
+            if (!already) {
+                const DWORD one = 1;
+                if (RegSetValueExW(item, kIconPromotedValue, 0, REG_DWORD,
+                                   reinterpret_cast<const BYTE*>(&one),
+                                   sizeof(one)) == ERROR_SUCCESS) {
+                    ++changed;
+                }
+            }
+        }
+
+        RegCloseKey(item);
+    }
+
+    RegCloseKey(root);
+    return changed;
 }
 
 }  // namespace sf

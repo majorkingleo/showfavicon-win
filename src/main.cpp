@@ -24,8 +24,14 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"ShowFaviconMainWindow";
 constexpr wchar_t kPaletteClassName[] = L"ShowFaviconPalette";
+constexpr UINT kTrayCallbackMsg = WM_APP + 1;
 constexpr UINT kShowSettingsMsg = WM_APP + 2;
 constexpr UINT kIconsChangedMsg = WM_APP + 3;
+constexpr UINT_PTR kPromoteTimerId = 1;
+// The shell writes its per-icon settings entry a moment after the icon is first
+// added, so promoting is retried a few times instead of once.
+constexpr int kPromoteTries = 4;
+constexpr UINT kPromoteRetryMs = 1200;
 constexpr wchar_t kInstanceMutex[] = L"ShowFavicon.SingleInstance";
 constexpr ULONGLONG kHourMs = 3600000ull;
 constexpr wchar_t kDefaultSite[] = L"https://github.com/";
@@ -39,6 +45,7 @@ struct Site {
     std::wstring url;
     std::wstring cacheFile;
     UINT id = 0;  // slot identity, so a refresh that raced a rebuild is ignored
+    NOTIFYICONDATAW nid = {};  // notification area icon, uID == id
     HICON icon = nullptr;
     bool ownsIcon = false;
     ULONGLONG nextRefreshAt = 0;
@@ -59,6 +66,7 @@ std::mutex g_retiredMutex;
 
 HANDLE g_hStop = nullptr;     // manual-reset; set on shutdown
 HANDLE g_hRefresh = nullptr;  // auto-reset; set on network/config change
+int g_promoteTriesLeft = 0;   // retries left for pulling icons out of the overflow
 
 void resizePalette();
 void refreshPalette();
@@ -125,14 +133,67 @@ void freeRetiredIcons() {
     }
 }
 
+// Add the notification-area icon for one site. Caller holds the lock, and the
+// hidden window must exist: it owns the icon's callback messages.
+void addTrayIcon(Site& site) {
+    site.nid = {};
+    site.nid.cbSize = sizeof(site.nid);
+    site.nid.hWnd = g_hwnd;
+    site.nid.uID = site.id;
+    site.nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    site.nid.uCallbackMessage = kTrayCallbackMsg;
+    site.nid.hIcon = site.icon;
+
+    std::wstring tip = sf::hostFromUrl(site.url);
+    if (tip.empty()) {
+        tip = L"ShowFavicon";
+    }
+    lstrcpynW(site.nid.szTip, tip.c_str(),
+              static_cast<int>(sizeof(site.nid.szTip) / sizeof(site.nid.szTip[0])));
+
+    Shell_NotifyIconW(NIM_ADD, &site.nid);
+    CPPDEBUG( Tools::wformat( L"tray: added icon %u for %s", site.nid.uID, tip ) );
+}
+
 // Drop every site. Caller holds the lock.
 void destroyAllSites() {
-    CPPDEBUG( Tools::format( "palette: dropping %d site(s)",
+    CPPDEBUG( Tools::format( "ui: dropping %d site(s)",
                              static_cast<int>(g_sites.size()) ) );
     for (auto& site : g_sites) {
+        if (site.nid.cbSize) {
+            Shell_NotifyIconW(NIM_DELETE, &site.nid);
+        }
         destroyOwnedIcon(site);
     }
     g_sites.clear();
+}
+
+// Ask the shell to keep this executable's tray icons out of the overflow.
+void promoteTrayIcons() {
+    const int promoted = sf::promoteNotificationIcons();
+    if (promoted > 0) {
+        CPPDEBUG( Tools::format( "tray: promoted %d notification icon(s)",
+                                 promoted ) );
+    }
+
+    if (--g_promoteTriesLeft <= 0) {
+        KillTimer(g_hwnd, kPromoteTimerId);
+    }
+}
+
+// Promotion is attempted once right away - after the first run the entries
+// already exist - and then on a timer, because a brand new icon's entry only
+// appears a moment after the icon was added.
+void startTrayPromotion() {
+    if (!g_hwnd) {
+        return;
+    }
+
+    g_promoteTriesLeft = kPromoteTries;
+    promoteTrayIcons();
+    if (g_promoteTriesLeft > 0) {
+        SetTimer(g_hwnd, kPromoteTimerId, kPromoteRetryMs, nullptr);
+    }
 }
 
 // (Re)build the site list from a list of URLs. UI thread only, so the icons it
@@ -151,11 +212,13 @@ void rebuildSites(const std::vector<std::wstring>& urls) {
             site.id = static_cast<UINT>(i + 1);
             site.icon = LoadIcon(nullptr, IDI_APPLICATION);  // shared, not owned
             site.nextRefreshAt = 0;  // fetch immediately
+            addTrayIcon(site);
             g_sites.push_back(std::move(site));
         }
     }
     resizePalette();
     refreshPalette();
+    startTrayPromotion();
     SetEvent(g_hRefresh);
 }
 
@@ -194,6 +257,9 @@ void refreshSite(size_t idx) {
         icon = LoadIcon(nullptr, IDI_APPLICATION);
     }
 
+    // Copied out under the lock and handed to the shell outside it, because a
+    // NIM_MODIFY call can wait on the tray window.
+    NOTIFYICONDATAW nid = {};
     {
         std::lock_guard<std::mutex> lk(g_sitesMutex);
         if (idx < g_sites.size() && g_sites[idx].id == id) {
@@ -203,6 +269,8 @@ void refreshSite(size_t idx) {
             }
             site.icon = icon;
             site.ownsIcon = owns;
+            site.nid.hIcon = icon;
+            nid = site.nid;
 
             if (ok) {
                 site.failures = 0;
@@ -218,6 +286,10 @@ void refreshSite(size_t idx) {
     }
     CPPDEBUG( Tools::format( "refresh: site %u %s", id,
                              ok ? "ok" : "failed" ) );
+
+    if (nid.cbSize) {
+        Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
 
     refreshPalette();
 }
@@ -585,6 +657,24 @@ bool createPalette(HINSTANCE hInstance) {
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+        case kTrayCallbackMsg: {
+            if (wParam < 1) {
+                return 0;
+            }
+            const size_t idx = static_cast<size_t>(wParam) - 1;
+            if (lParam == WM_LBUTTONUP) {
+                openSite(idx);
+            } else if (lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU) {
+                showPaletteMenu(hwnd, static_cast<int>(idx));
+            }
+            return 0;
+        }
+        case WM_TIMER:
+            if (wParam == kPromoteTimerId) {
+                promoteTrayIcons();
+                return 0;
+            }
+            break;
         case kShowSettingsMsg:
             // A second start of the app asks this instance, which owns the
             // palette, to show the dialog instead of showing its own.

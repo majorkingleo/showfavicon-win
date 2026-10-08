@@ -57,4 +57,12 @@ bool setAutoStart(bool enable);
 bool loadPalettePos(int& x, int& y);
 void savePalettePos(int x, int y);
 
+// Windows 11 parks new notification-area icons in the overflow flyout. The
+// shell keeps that choice per icon and per executable under
+// HKCU\Control Panel\NotifyIconSettings; writing IsPromoted there is what the
+// taskbar settings page itself does, and a running shell applies it at once, so
+// an icon already in the tray leaves the overflow without Explorer restarting.
+// Returns how many entries had to be changed.
+int promoteNotificationIcons();
+
 }  // namespace sf
