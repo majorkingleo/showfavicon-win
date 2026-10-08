@@ -10,6 +10,17 @@ dependencies.
 
 This project is **vibe coded**
 
+## Screenshots
+
+One icon per configured site, in the notification area next to the clock (marked
+red here):
+
+![The site icons in the notification area](screenshots/task_bar.png)
+
+The settings dialog, reached with a right click on an icon → *Configure…*:
+
+![The settings dialog](screenshots/configure-screen.png)
+
 ## What it does
 
 - **One tray icon per site.** The host of each URL is the tooltip.
