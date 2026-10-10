@@ -95,15 +95,20 @@ void flushFile() {
     }
 }
 
-// The backend loop. Every backend's semaphore is released by every message, so
-// waiting on one of them is enough to know that anything arrived.
+// The backend loop. A backend's semaphore is released by every message, so on a
+// platform whose std::counting_semaphore really blocks, waiting on one of them
+// is enough to know that anything arrived. MinGW is the exception (see below).
 void run() {
     // Identifiable as "logger" in the debugger, next to main/worker/network.
     nameCurrentThread(L"logger");
 
+#ifndef __MINGW32__
+    // The backend to wait on. Not needed under MinGW: there the semaphore wait
+    // busy-spins, so the idle path below sleeps instead.
     AsyncOut::Logger* primary = g_file
                                     ? static_cast<AsyncOut::Logger*>(g_file.get())
                                     : g_console.get();
+#endif
 
     auto next_flush = std::chrono::steady_clock::now() + kFlushInterval;
 
@@ -116,11 +121,25 @@ void run() {
             next_flush = std::chrono::steady_clock::now() + kFlushInterval;
         }
 
+#ifdef __MINGW32__
+        // MinGW's libstdc++ has no platform_wait (futex) on Windows, so
+        // AsyncOut::Logger::wait_for() - a std::counting_semaphore::
+        // try_acquire_for - is a sched_yield spin that burns a full core while
+        // idle (measured at 59984 ms cpu in 60000 ms wall). The loop already
+        // polls at this cadence, so a real sleep costs at most kIdleTimeout of
+        // latency on a message - nothing against the 3 s flush interval - and
+        // no CPU.
+        std::this_thread::sleep_for(kIdleTimeout);
+#else
+        // The correct choice where the semaphore really blocks: the logger
+        // wakes as soon as a backend is handed a message, instead of on the
+        // next poll.
         if (primary) {
             primary->wait_for(kIdleTimeout);
         } else {
             std::this_thread::sleep_for(kIdleTimeout);
         }
+#endif
     }
 
     // Final drain, while the backends are still alive.
