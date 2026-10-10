@@ -21,6 +21,12 @@ const wchar_t kUserAgent[] =
 
 bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
            std::wstring& finalUrl) {
+#ifdef LOG_TIMING
+    // A fetch that takes a long time means the worker thread is burning CPU
+    // somewhere (TLS, redirects, or the byte loop below), so its cost is logged.
+    const ULONGLONG startMs = GetTickCount64();
+#endif
+
     HINTERNET hSession =
         WinHttpOpen(L"ShowFavicon/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -110,8 +116,14 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
             } else if (status >= 200 && status < 300) {
                 body.clear();
                 DWORD available = 0;
+#ifdef LOG_TIMING
+                int chunks = 0;
+#endif
                 while (WinHttpQueryDataAvailable(hRequest, &available) &&
                        available > 0) {
+#ifdef LOG_TIMING
+                    ++chunks;
+#endif
                     size_t oldSize = body.size();
                     body.resize(oldSize + available);
                     DWORD read = 0;
@@ -126,10 +138,17 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
                 }
                 finalUrl = url;
                 ok = true;
+#ifdef LOG_TIMING
+                CPPDEBUG( Tools::wformat(
+                    L"fetch: HTTP %d, %d bytes in %d chunk(s), final %s",
+                    static_cast<int>(status), static_cast<int>(body.size()),
+                    chunks, url ) );
+#else
                 CPPDEBUG( Tools::wformat( L"fetch: HTTP %d, %d bytes, final %s",
                                           static_cast<int>(status),
                                           static_cast<int>(body.size()),
                                           url ) );
+#endif
             } else {
                 // A 404 on /favicon.ico is normal, so this stays informational.
                 CPPDEBUG( Tools::wformat( L"fetch: HTTP %d for %s",
@@ -147,9 +166,19 @@ bool fetch(const std::wstring& initialUrl, std::vector<std::uint8_t>& body,
 
     WinHttpCloseHandle(hSession);
 
+#ifdef LOG_TIMING
+    const int elapsedMs = static_cast<int>(GetTickCount64() - startMs);
+    if (!ok) {
+        CPPDEBUG( Tools::wformat( L"fetch: gave up on %s after %d ms", initialUrl,
+                                  elapsedMs ) );
+    } else {
+        CPPDEBUG( Tools::format( "fetch: done in %d ms", elapsedMs ) );
+    }
+#else
     if (!ok) {
         CPPDEBUG( Tools::wformat( L"fetch: gave up on %s", initialUrl ) );
     }
+#endif
 
     return ok;
 }

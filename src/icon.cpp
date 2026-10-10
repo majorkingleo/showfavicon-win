@@ -363,8 +363,23 @@ bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out) {
 
     std::string html(page.begin(), page.end());
 
+#ifdef LOG_TIMING
+    // findIconLinkHrefs lowercases the whole document once per <link> tag it
+    // sees, so on a large page it is the expensive part of a refresh. Its cost
+    // and the document size are logged together so a CPU spike can be traced
+    // to the parse rather than the download.
+    const ULONGLONG parseStart = GetTickCount64();
+#endif
+    const std::vector<std::string> hrefs = findIconLinkHrefs(html);
+#ifdef LOG_TIMING
+    CPPDEBUG( Tools::format( "icon: parsed %d byte(s), %d icon link(s) in %d ms",
+                             static_cast<int>(html.size()),
+                             static_cast<int>(hrefs.size()),
+                             static_cast<int>(GetTickCount64() - parseStart) ) );
+#endif
+
     std::vector<std::wstring> candidates;
-    for (const auto& href : findIconLinkHrefs(html)) {
+    for (const auto& href : hrefs) {
         candidates.push_back(resolveUrl(pageUrl, utf8ToWide(href)));
     }
 
@@ -391,10 +406,20 @@ bool fetchIconForSite(const std::wstring& siteUrl, RgbaImage& out) {
         CPPDEBUG( Tools::wformat( L"icon: candidate %s, %d bytes",
                                   finalCandidate,
                                   static_cast<int>(bytes.size()) ) );
-        if (decodeImage(bytes, out)) {
+#ifdef LOG_TIMING
+        const ULONGLONG decodeStart = GetTickCount64();
+#endif
+        const bool decoded = decodeImage(bytes, out);
+        if (decoded) {
+#ifdef LOG_TIMING
+            CPPDEBUG( Tools::wformat( L"icon: decoded %dx%d from %s in %d ms",
+                                      out.width, out.height, finalCandidate,
+                                      static_cast<int>(GetTickCount64() -
+                                                       decodeStart) ) );
+#else
             CPPDEBUG( Tools::wformat( L"icon: decoded %dx%d from %s",
-                                      out.width, out.height,
-                                      finalCandidate ) );
+                                      out.width, out.height, finalCandidate ) );
+#endif
             return true;
         }
         CPPDEBUG( "icon: candidate did not decode" );

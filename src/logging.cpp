@@ -4,6 +4,7 @@
 #include "AsyncFileLogger.h"
 #include "AsyncOutDebug.h"
 
+#include "diag.h"
 #include "util.h"
 
 #include <CpputilsDebug.h>
@@ -102,6 +103,9 @@ void run() {
     // Identifiable as "logger" in the debugger, next to main/worker/network.
     nameCurrentThread(L"logger");
 
+    // LOG_TIMING only: reports how often this loop turned and the CPU it used.
+    sf::Heartbeat heartbeat("logger");
+
 #ifndef __MINGW32__
     // The backend to wait on. Not needed under MinGW: there the semaphore wait
     // busy-spins, so the idle path below sleeps instead.
@@ -113,6 +117,8 @@ void run() {
     auto next_flush = std::chrono::steady_clock::now() + kFlushInterval;
 
     while (!g_quit) {
+        heartbeat.tick();
+
         drainConsole();
         drainFile();
 

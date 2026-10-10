@@ -4,6 +4,7 @@
 #include <wininet.h>
 #include <iphlpapi.h>
 
+#include "diag.h"
 #include "http.h"
 #include "icon.h"
 #include "logging.h"
@@ -25,6 +26,12 @@ constexpr wchar_t kWindowClassName[] = L"ShowFaviconMainWindow";
 constexpr UINT kTrayCallbackMsg = WM_APP + 1;
 constexpr UINT kShowSettingsMsg = WM_APP + 2;
 constexpr UINT_PTR kPromoteTimerId = 1;
+#ifdef LOG_TIMING
+// Reports the UI thread's CPU once a minute: the message loop blocks in
+// GetMessageW and therefore cannot produce a heartbeat of its own.
+constexpr UINT_PTR kDiagTimerId = 2;
+constexpr UINT kDiagIntervalMs = 60000;
+#endif
 // The shell writes its per-icon settings entry a moment after the icon is first
 // added, so promoting is retried a few times instead of once.
 constexpr int kPromoteTries = 4;
@@ -233,6 +240,12 @@ void refreshSite(size_t idx) {
         return;
     }
 
+#ifdef LOG_TIMING
+    // Timing around the whole pipeline (fetch, parse, decode, HICON), so a
+    // refresh that eats CPU shows its cost and not just its result.
+    const ULONGLONG startMs = GetTickCount64();
+#endif
+
     sf::RgbaImage img;
     bool ok = sf::fetchOrCachedIcon(url, cacheFile, img);
     HICON icon = ok ? sf::imageToHicon(img) : nullptr;
@@ -267,8 +280,13 @@ void refreshSite(size_t idx) {
             DestroyIcon(icon);
         }
     }
-    CPPDEBUG( Tools::format( "refresh: site %u %s", id,
-                             ok ? "ok" : "failed" ) );
+#ifdef LOG_TIMING
+    CPPDEBUG( Tools::format( "refresh: site %u %s in %d ms", id,
+                             ok ? "ok" : "failed",
+                             static_cast<int>(GetTickCount64() - startMs) ) );
+#else
+    CPPDEBUG( Tools::format( "refresh: site %u %s", id, ok ? "ok" : "failed" ) );
+#endif
 
     if (nid.cbSize) {
         Shell_NotifyIconW(NIM_MODIFY, &nid);
@@ -279,7 +297,14 @@ DWORD WINAPI workerProc(LPVOID) {
     sf::nameCurrentThread(L"worker");
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
+    // Reports once a minute how often this loop turned and how much CPU it
+    // used: a spin here is a rate in the thousands plus CPU that grows with
+    // wall time, an idle loop is a handful of iterations and ~0 ms.
+    sf::Heartbeat heartbeat("worker");
+
     for (;;) {
+        heartbeat.tick();
+
         if (WaitForSingleObject(g_hStop, 0) == WAIT_OBJECT_0) {
             break;
         }
@@ -307,12 +332,24 @@ DWORD WINAPI workerProc(LPVOID) {
             waitMs = static_cast<DWORD>(std::min<ULONGLONG>(earliest - now, 60000));
         }
 
+#ifdef LOG_TIMING
+        // A wait that is about to expire almost immediately is the shape a
+        // near-spin takes; logging it makes that visible in the log.
+        if (waitMs < 100) {
+            CPPDEBUG( Tools::format( "diag: worker waits only %u ms, %d due",
+                                     waitMs, static_cast<int>(due.size()) ) );
+        }
+#endif
+
         HANDLE hs[2] = {g_hStop, g_hRefresh};
         DWORD w = WaitForMultipleObjects(2, hs, FALSE, waitMs);
         if (w == WAIT_OBJECT_0) {
             break;
         }
         if (w == WAIT_OBJECT_0 + 1) {
+#ifdef LOG_TIMING
+            CPPDEBUG( "diag: worker woken by the refresh event" );
+#endif
             std::lock_guard<std::mutex> lk(g_sitesMutex);
             for (auto& s : g_sites) {
                 s.nextRefreshAt = 0;  // force immediate refresh
@@ -326,7 +363,21 @@ DWORD WINAPI workerProc(LPVOID) {
 
 DWORD WINAPI networkProc(LPVOID) {
     sf::nameCurrentThread(L"network");
+#ifdef LOG_TIMING
+    CPPDEBUG( "diag: network thread started" );
+#endif
+
+    // This thread parks inside the synchronous form of NotifyAddrChange
+    // (OVERLAPPED == NULL) until an address really changes, so it normally uses
+    // no CPU at all and its heartbeat only appears after a change. It is logged
+    // anyway: on a machine that keeps changing addresses the call returns over
+    // and over and this loop would spin, and that has to be visible rather than
+    // hidden behind a thread that looks idle.
+    sf::Heartbeat heartbeat("network");
+
     for (;;) {
+        heartbeat.tick();
+
         if (WaitForSingleObject(g_hStop, 0) == WAIT_OBJECT_0) {
             break;
         }
@@ -344,6 +395,9 @@ DWORD WINAPI networkProc(LPVOID) {
                 SetEvent(g_hRefresh);  // network changed
             }
         } else {
+#ifdef LOG_TIMING
+            CPPDEBUG( "diag: NotifyAddrChange failed, retrying in 5 s" );
+#endif
             WaitForSingleObject(g_hStop, 5000);  // retry registration shortly
         }
     }
@@ -462,6 +516,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 promoteTrayIcons();
                 return 0;
             }
+#ifdef LOG_TIMING
+            if (wParam == kDiagTimerId) {
+                sf::logThreadCpu("ui");
+                return 0;
+            }
+#endif
             break;
         case kShowSettingsMsg:
             // A second start asks this instance for the settings dialog instead
@@ -488,6 +548,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         default:
             return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
+
+    return 0;
 }
 
 }  // namespace
@@ -598,6 +660,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
     // Adds the tray icons and starts the promotion retries.
     rebuildSites(urls);
 
+#ifdef LOG_TIMING
+    // Reports the UI thread's CPU once a minute for the whole run; a message
+    // loop blocked in GetMessageW emits nothing else.
+    SetTimer(g_hwnd, kDiagTimerId, kDiagIntervalMs, nullptr);
+#endif
+
     HANDLE hWorker = CreateThread(nullptr, 0, workerProc, nullptr, 0, nullptr);
     HANDLE hNet = CreateThread(nullptr, 0, networkProc, nullptr, 0, nullptr);
 
@@ -611,10 +679,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/,
         openSettings(g_hwnd);
     }
 
+    // The message loop blocks in GetMessageW, so this only ticks while messages
+    // are actually being dispatched; a flooded queue shows up as the rate
+    // rising. An idle UI thread still reports its CPU from kDiagTimerId.
+    sf::Heartbeat heartbeat("ui");
+
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+        heartbeat.tick();
     }
 
     CPPDEBUG( "shutdown: message loop ended" );

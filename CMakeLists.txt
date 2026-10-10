@@ -6,6 +6,11 @@ enable_language(RC)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# CPU/timing diagnostics in src/diag.h (per-thread heartbeats, fetch/parse
+# timings). Off by default, so the shipped binary carries none of it; switch it
+# on (-DLOG_TIMING=ON) to hunt a process that burns CPU.
+option(LOG_TIMING "Enable the CPU/timing diagnostics in src/diag.h" OFF)
+
 # cpputils' CPPDEBUG is compiled out when NDEBUG is defined. Autotools - the
 # reference build - never sets it, and a tray app's log matters most in the
 # shipped Release binary, so drop the flag CMake adds for Release.
@@ -99,6 +104,10 @@ target_compile_definitions(showfavicon PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
 )
+
+if(LOG_TIMING)
+    target_compile_definitions(showfavicon PRIVATE LOG_TIMING)
+endif()
 
 target_compile_options(showfavicon PRIVATE
     -fno-declone-ctor-dtor
